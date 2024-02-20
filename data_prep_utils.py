@@ -1,5 +1,5 @@
 import sys
-sys.path.append("/home/giacomo/programs/MegaDetector/md_visualization")
+sys.path.append("/home/giacomo/repos/MegaDetector/md_visualization")
 
 import math
 import cv2
@@ -110,7 +110,7 @@ def get_box_centers_in_patch(annotations_in_img: list, box_dims: dict, patch_coo
     """
     patch_box_centers = []
     for ann in annotations_in_img:                
-        # In the input annotations, boxes are expected to x/y/w/h
+        # In the input annotations, boxes are expected as x/y/w/h
         box_x_center = ann['bbox'][COCO_BOX_XMIN_IDX] + (ann['bbox'][COCO_BOX_WIDTH_IDX]/2.0)
         box_y_center = ann['bbox'][COCO_BOX_YMIN_IDX] + (ann['bbox'][COCO_BOX_HEIGHT_IDX]/2.0)
         
@@ -126,6 +126,7 @@ def get_box_centers_in_patch(annotations_in_img: list, box_dims: dict, patch_coo
             patch_box_centers.append([{"x": box_x_center, "y": box_y_center}, ann['category_id']])
     
     return patch_box_centers
+
 
 
 def get_boxes_in_patch(annotations_in_img: list, clip_boxes: bool, box_dims: dict, patch_dims: list, 
@@ -154,7 +155,7 @@ def get_boxes_in_patch(annotations_in_img: list, clip_boxes: bool, box_dims: dic
                                                  box_dims=box_dims, patch_coords=patch_coords)
     
     if not patch_box_centers:
-        return [], [], 0
+        return [], [], 0, class_distr_patch
     
     n_clipped_boxes = 0
     yolo_boxes_patch = []
@@ -218,6 +219,55 @@ def get_boxes_in_patch(annotations_in_img: list, clip_boxes: bool, box_dims: dic
         class_distr_patch[coords_cat[BOX_CAT_IDX]] += 1
 
     return patch_box_centers, yolo_boxes_patch, n_clipped_boxes, class_distr_patch
+
+
+def get_points_in_patch(annotations_in_img: list, patch_dims: list, patch_coords: dict, categories: list) -> tuple[list, list, int, dict]:
+    """
+    For a given patch, create a list of point labels (as yolo-formatted dictionaries) that lie within that patch
+    Arguments: 
+        annotations_in_img (list):  list containing dictionaries of annotations (point labels) in the image the patch
+                                    was taken from.
+        patch_dims (dict):          dict specifying the dimensions of the patch.
+        patch_coords (dict):        dict specifying the coordinates (in pixel) of the patch
+        categories:                 list of classes in the datset
+    Returns: 
+        1.  a list containing  dictionaries with the coordinates (in pixel) of the point labels that lie within 
+            the provided patch.
+        4.  the class distribution in the patch
+    """
+
+    class_distr_patch = {cat["id"]: 0 for cat in categories}
+    gt_points = []
+
+    for ann in annotations_in_img:                
+        gt_x = ann["x"]
+        gt_y = ann["y"]
+        
+        patch_contains_pt = (patch_coords["x_min"] < gt_x and gt_x < patch_coords["x_max"] \
+                            and patch_coords["y_min"] < gt_y and gt_y < patch_coords["y_max"])
+        
+        if patch_contains_pt:
+             x_center_absolute_patch = x_center_absolute_original - patch_coords["x_min"]
+        y_center_absolute_patch = y_center_absolute_original - patch_coords["y_min"]
+        
+        assert (1 + patch_coords["x_max"] - patch_coords["x_min"]) == patch_dims["width"]
+        assert (1 + patch_coords["y_max"] - patch_coords["y_min"]) == patch_dims["height"]
+        
+       WARUM??
+       
+        x_center_relative = x_center_absolute_patch / patch_dims["width"]
+        y_center_relative = y_center_absolute_patch / patch_dims["height"]
+            gt_points.append([{"x": gt_x, "y": gt_y}, ann['category_id']])
+    
+    return patch_box_centers
+
+    return patch_box_centers, yolo_boxes_patch, n_clipped_boxes, class_distr_patch
+
+
+def get_annotations_in_patch(boxes_in: bool, boxes_out: bool):
+    # return either boxes or points and if there are box annotations, but we 
+    pass
+    
 
 
 def process_image(source_dir_img: str, img: dict, img_width: int, img_height: int, is_negative: bool, 
@@ -401,3 +451,6 @@ def vis_processed_img(img: dict, source_dir_img: str, img_id_to_ann: dict, patch
             cv2.rectangle(patch_arr, (x_min, ymin), (xmax, ymax), (0, 255, 0), 1)
 
             cv2.imwrite(str(output_path / f"{patch_dict['patch_name']}.jpg"))
+
+
+#TODO: image-level symlinks
