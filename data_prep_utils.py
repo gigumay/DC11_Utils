@@ -21,6 +21,9 @@ COCO_BOX_YMIN_IDX = 1
 COCO_BOX_WIDTH_IDX = 2
 COCO_BOX_HEIGHT_IDX = 3
 
+INPUT_FORMAT_Y_IDX = 0
+INPUT_FORMAT_X_IDX = 1
+
 PATCH_XSTART_IDX = 0
 PATCH_YSTART_IDX = 1
 
@@ -314,7 +317,8 @@ def get_annotations_in_patch(annotations_in_img: list, boxes_in: bool, boxes_out
         annotations_in_img (list):  list containing dictionaries of annotations (bounding boxes) in the image 
                                     the patch was taken from.
         boxes_in (bbol):            must be set to true if the input annotations contain bounding boxes
-        boxes_out (bool):           if false, return point labels instead of bounding boxes
+        boxes_out (bool):           if false, return point labels instead of bounding boxes. Must be set to false
+                                    when working iwht point labels. 
         patch_dims (dict):          dict specifying the dimensions of the patch.
         patch_coords (dict):        dict specifying the coordinates (in pixel) of the patch
         categories (list):          list of classes in the datset
@@ -351,43 +355,50 @@ def get_annotations_in_patch(annotations_in_img: list, boxes_in: bool, boxes_out
     
 
 
-def process_image(source_dir_img: str, img: dict, img_width: int, img_height: int, is_negative: bool, 
-                  img_id_to_ann: dict, patch_dims: dict, patch_start_positions: list, patch_jpeg_quality: int, 
-                  box_dims: dict, clip_boxes: bool,  write_tiles: bool, write_empty_file_neg: bool, categories: list,
-                  visualize: bool, dest_dir_imgs: str, dest_dir_txt: str, vis_output_dir: str = None) -> dict:
+def process_image(source_dir_img: str, img: dict, img_width: int, img_height: int, is_negative: bool, boxes_in: bool,
+                  boxes_out: bool, img_id_to_ann: dict, patch_dims: dict, patch_start_positions: list, 
+                  patch_jpeg_quality: int, write_tiles: bool, write_empty_file_neg: bool, categories: list,
+                  visualize: bool, dest_dir_imgs: str, dest_dir_txt: str, box_dims: dict = None, clip_boxes: bool = True, 
+                  vis_output_dir: str = None) -> dict:
     """
     Process a given image. Processing consists of dividing the image into patches and assigning each 
     patch a set of annotations (boxes or points) that lie within that patch. If the corresponding parameters are
-    set accordingly the patches are saved as image files and bounding box-metadata is written to files in yolo-format (happens
-    always for patches that contain bounding boxes, but if desired empty files can be written for empty patches
+    set accordingly the patches are saved as image files and box-/point-metadata is written to files in yolo-format 
+    (happens always for patches that contain bounding boxes, but if desired empty files can be written for empty patches
     as well). 
     Arguments: 
-        source_dir_img (str):           path to the directoryt where the image is stored
+        source_dir_img (str):           path to the directory where the image is stored
         img (dict):                     dictionary containing the image metadata
         img_width (int):                width of the image
         img_height (int):               height of the image
         is_negative (bool):             set to true if the image does not contain animals (is empty)
-        img_id_to_ann (dict):           a dictionary mapping image ids to lists of bounding boxes contained
-                                        in the respective images. Annotations are expected in the COCO-format.
+        boxes_in (bbol):                must be set to true if the input annotations contain bounding boxes
+        boxes_out (bool):               if false, return point labels instead of bounding boxes. Must be set to false
+                                        when working iwht point labels. 
+        img_id_to_ann (dict):           a dictionary mapping image ids to lists of annotations contained
+                                        in the respective images. bounding boxes are expected in the COCO-format.
         patch_dims (dict):              dict specifying the dimensions of the patches.
         patch_start_positions (list):   list of pixel coordinates specifying the starting positions of the 
                                         patches
         patch_jpeg_quality (int):       quality of the patch-images
-        box_dims (dict):                dict specifying the dimensions of bounding boxes.
-        clip_boxes (bool):              whether or not to clip boxes that exceed patch boundaries
         write_tiles (bool):             if true, the patches are saved as images 
         write_empty_file_neg (bool):    if true, empty yolo-files are created for empty patches
         categories:                     list of classes in the datset
-        visualize (bool):               if true, the bounding boxes are drawn into the image and the patches,
+        visualize (bool):               if true, the annotations are drawn into the image and the patches,
                                         which are then written into a specified directory.
         dest_dir_imgs (str):            path to the directory the patch images will be stored in
         dest_dir_txt (str):             path to the directory the bounding-box metadat files will be stored in
+        box_dims (dict):                dictionary specifying the dimensions of bounding boxes. Can be set manually in
+                                        cases where the annotations contain arbitrary bbox dimensions and only the centers
+                                        are reliable (as is allegedly the case in the Izembek dataset). Otherwise, 
+                                        the box dimensions will be extracted from the annotations.
+        clip_boxes (bool):              whether or not to clip boxes that exceed patch boundaries
         vis_output_dir (str):           path to the directory where the visualizations will be stored
     Returns: 
         a dictionary containing:    1.  a dictionary mapping patch names to metadata for all bounding boxes 
                                         that lie within the respective patches
                                     2.  the number of patches extracted from the image 
-                                    3.  the number of boxes found in the image
+                                    3.  the number of annotations found in the image
                                     4.  the number of boxes that had to be clipped during the patching.
     """
 
@@ -400,8 +411,7 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
     patch_metadata_mapping_img = {}
     n_annotations_img = 0
     n_boxes_clipped_img = 0
-    n_patches = 0
-    
+    n_patches_img = 0
     class_distr_img = {cat["id"]: 0 for cat in categories}
 
     for patch in patch_start_positions:
@@ -410,23 +420,24 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
                         "x_max": patch[PATCH_XSTART_IDX] + patch_dims["width"] - 1,
                         "y_max": patch[PATCH_YSTART_IDX] + patch_dims["height"] - 1}
         
-        box_centers = []
-        boxes = []
-        points = []
-        n_boxes_clipped = 0
 
         if not is_negative:
-            box_centers, boxes, n_boxes_clipped, patch_distr = get_boxes_in_patch(annotations_in_img=annotations, 
-                                                                                  clip_boxes=clip_boxes, box_dims=box_dims, 
-                                                                                  patch_dims=patch_dims, patch_coords=patch_coords, 
-                                                                                  categories=categories)
+            gt, patch_distr, box_centers, n_boxes_clipped = get_annotations_in_patch(annotations_in_img=annotations, 
+                                                                                     boxes_in=boxes_in, 
+                                                                                     boxes_out=boxes_out, 
+                                                                                     patch_dims=patch_dims, 
+                                                                                     patch_coords=patch_coords, 
+                                                                                     categories=categories, 
+                                                                                     box_dims=box_dims, 
+                                                                                     buffer_dims_pct=buffer_dims_pct,
+                                                                                     clip_boxes=clip_boxes)
             
             # skip empty patches in positive images
-            if not box_centers:
+            if not gt:
                 continue 
 
             n_boxes_clipped_img += n_boxes_clipped
-            n_boxes_img += len(boxes)
+            n_annotations_img += len(gt)
             class_distr_img += patch_distr
 
         
@@ -444,12 +455,13 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
            'patch_y_min': patch_coords["y_min"],
            'patch_x_max': patch_coords["x_max"],
            'patch_y_max': patch_coords["y_max"],
-           'boxes': boxes,
+           'boxes': gt if boxes_out else None,
+           'points': gt if not boxes_out else None,
            'class_distribution': patch_distr,
            'hard_negative': is_negative
         }
 
-        if not is_negative:
+        if not is_negative and boxes_out:
             patch_metadata["box_centers"] = box_centers
 
         patch_metadata_mapping_img[patch_name] = patch_metadata
@@ -474,34 +486,41 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
         
         if not is_negative or write_empty_file_neg:
             with open(patch_ann_file, 'w') as f:
-                for yolo_box in boxes:
-                    f.write(f"{yolo_box[YOLO_BOX_CAT_IDX]} {yolo_box[YOLO_BOX_XCENTER_IDX]} {yolo_box[YOLO_BOX_YCENTER_IDX]} " \
-                            f"{yolo_box[YOLO_BOX_WIDTH_IDX]} {yolo_box[YOLO_BOX_HEIGHT_IDX]}\n")
+                for ann in gt:
+                    if boxes_out:
+                        ann_str = f"{ann[YOLO_BOX_CAT_IDX]} {ann[YOLO_BOX_XCENTER_IDX]} " \
+                                  f"{ann[YOLO_BOX_YCENTER_IDX]} {ann[YOLO_BOX_WIDTH_IDX]} " \
+                                  f"{ann[YOLO_BOX_HEIGHT_IDX]}\n"
+                    else:
+                        ann_str = f"{ann['category_id']} {ann['x']} {ann['y']}\n"
+                    
+                    f.write(ann_str)
                     
             assert Path.exists(patch_ann_file)
 
-        n_patches += 1
+        n_patches_img += 1
     
     if visualize:
+        assert vis_output_dir, "Please provide a path to a directory where visulaizations can be stored!"
         vis_processed_img(img=img, source_dir_img=source_dir_img, img_id_to_ann=img_id_to_ann, patch_metadata_mapping_img=patch_metadata_mapping_img,
                           output_dir=vis_output_dir)
 
-    return {"patches_mapping": patch_metadata_mapping_img, "n_patches": n_patches,
-            "n_boxes": n_boxes_img, "n_boxes_clipped":  n_boxes_clipped}
+    return {"patches_mapping": patch_metadata_mapping_img, "n_patches": n_patches_img,
+            "n_annotations": n_annotations_img, "n_boxes_clipped":  n_boxes_clipped}
 
 
 
-
-def vis_processed_img(img: dict, source_dir_img: str, img_id_to_ann: dict, patch_metadata_mapping_img: dict, output_dir: str) -> None:
+def vis_processed_img(img: dict, source_dir_img: str, img_id_to_ann: dict, patch_metadata_mapping_img: dict, boxes_out: bool, 
+                      output_dir: str) -> None:
     """
-    Draws bounding boxes into the provided image and the corresponding patches. Image and patches are then written into the specified 
+    Draws annotations into the provided image and the corresponding patches. Image and patches are then stored in the specified 
     directory.
     Arguments:
         img (dict):                         dictionary containing the image metadata
         source_dir_img (str):               path to the directoryt where the image is stored
-        img_id_to_ann (dict):               a dictionary mapping image ids to lists of bounding boxes contained
-                                            in the respective images. Annotations are expected in the COCO-format.
-        patch_metadata_mapping_img (dict):  dictionary containing the metadat for all patches of the image in question
+        img_id_to_ann (dict):               a dictionary mapping image ids to lists of annotations contained
+                                            in the respective images. Bounding boxes are expected in the COCO-format.
+        patch_metadata_mapping_img (dict):  dictionary containing the metadata for all patches of the image in question
         output_dir (str):                   directory where the output files will be stroed
 
     Returns:
@@ -514,34 +533,37 @@ def vis_processed_img(img: dict, source_dir_img: str, img_id_to_ann: dict, patch
     img_arr = cv2.imread(Path(source_dir_img) / img["file_name"])
 
     for ann in img_id_to_ann[img["id"]]:
-        cv2.rectangle(img_arr, (ann["bbox"][COCO_BOX_XMIN_IDX], ann["bbox"][COCO_BOX_YMIN_IDX]), 
-                      (ann["bbox"][COCO_BOX_XMIN_IDX] + ann["bbox"][COCO_BOX_WIDTH_IDX], ann["bbox"][COCO_BOX_YMIN_IDX] + ann["bbox"][COCO_BOX_HEIGHT_IDX]),
-                      (0, 255, 0), 1)
+        
+        if boxes_out:
+            xmin_img = ann["bbox"][COCO_BOX_XMIN_IDX]
+            xmax_img = ann["bbox"][COCO_BOX_XMIN_IDX] + ann["bbox"][COCO_BOX_WIDTH_IDX]
+            ymin_img = ann["bbox"][COCO_BOX_YMIN_IDX]
+            ymax_img = ann["bbox"][COCO_BOX_YMIN_IDX] + ann["bbox"][COCO_BOX_HEIGHT_IDX]
+         
+            cv2.rectangle(img_arr, (xmin_img, ymin_img), (xmax_img, ymax_img), (0, 255, 0), 1)
+        else:
+            img_arr[ann["point"][INPUT_FORMAT_Y_IDX], ann["point"][INPUT_FORMAT_X_IDX]] = (0, 255, 0)
 
     cv2.imwrite(str(output_path / f"full_img.jpg"))
 
     for key in patch_metadata_mapping_img:
         patch_dict = patch_metadata_mapping_img[key]
         patch_arr = img_arr[patch_dict["patch_y_min"] : patch_dict["patch_y_max"], patch_dict["patch_x_min"], patch_dict["patch_x_max"]]
-        for box in patch_dict["boxes"]:
-            x_min = box[YOLO_BOX_XCENTER_IDX] - box[YOLO_BOX_WIDTH_IDX] / 2
-            xmax = box[YOLO_BOX_XCENTER_IDX] + box[YOLO_BOX_WIDTH_IDX] / 2
-            ymin = box[YOLO_BOX_YCENTER_IDX] - box[YOLO_BOX_HEIGHT_IDX] / 2
-            ymax = box[YOLO_BOX_YCENTER_IDX] + box[YOLO_BOX_HEIGHT_IDX] / 2
 
+        if boxes_out:
+            gt = patch_dict["boxes"]
+        else:
+            gt = patch_dict["points"]
 
-            cv2.rectangle(patch_arr, (x_min, ymin), (xmax, ymax), (0, 255, 0), 1)
+        for ann in gt:
+            if boxes_out:
+                xmin_patch = ann[YOLO_BOX_XCENTER_IDX] - ann[YOLO_BOX_WIDTH_IDX] / 2
+                xmax_patch = ann[YOLO_BOX_XCENTER_IDX] + ann[YOLO_BOX_WIDTH_IDX] / 2
+                ymin_patch = ann[YOLO_BOX_YCENTER_IDX] - ann[YOLO_BOX_HEIGHT_IDX] / 2
+                ymax_patch = ann[YOLO_BOX_YCENTER_IDX] + ann[YOLO_BOX_HEIGHT_IDX] / 2
+
+                cv2.rectangle(patch_arr, (xmin_patch, ymin_patch), (xmax_patch, ymax_patch), (0, 255, 0), 1)
+            else:
+                patch_arr[ann["y"], ann["x"]] = (0, 255, 0)
 
             cv2.imwrite(str(output_path / f"{patch_dict['patch_name']}.jpg"))
-
-
-
-"""
-box_dims (dict):            dictionary specifying the dimensions of bounding boxes. Can be set manually in
-                                    cases where the annotations contain arbitrary bbox dimensions and only the centers
-                                    are reliable (as is allegedly the case in the Izembek dataset). Otherwise, 
-                                    the box dimensions will be extracted from the annotations.
-"""
-
-
-#TODO: image-level symlinks
