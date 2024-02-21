@@ -2,6 +2,7 @@ import sys
 sys.path.append("/home/giacomo/repos/MegaDetector/md_visualization")
 
 import math
+import random
 import cv2
 
 from pathlib import Path
@@ -23,8 +24,29 @@ COCO_BOX_HEIGHT_IDX = 3
 PATCH_XSTART_IDX = 0
 PATCH_YSTART_IDX = 1
 
-BOX_CENTERS_DICT_IDX = 0
-BOX_CAT_IDX = 1
+
+def randomize_centers(yolo_box: list, buffer_dims_pct: float) -> dict:
+    """
+    Given a yolo-formatted bounding box, a point that lies within a buffer around the box center point
+    is randomly sampled and returned.
+    Arguments:
+        yolo_box (list):            list specifying the yolo-formatted bounding box
+        buffer_dims_pct (float):    percentage of the box-width and -height that is going to be used to 
+                                    create the buffer. Specifically, the buffer will have its center at 
+                                    the box center and will have the dimensions (box_width * buffer_dims_pct), 
+                                    (box_height * buffer_dims_pct).
+    Returns:
+        A dictionary containing the randomly sampled point coordinates and the ground truth class
+    """
+    buffer_width = yolo_box[YOLO_BOX_WIDTH_IDX] * buffer_dims_pct
+    buffer_height = yolo_box[YOLO_BOX_HEIGHT_IDX] * buffer_dims_pct
+
+    random_x = random.randint(math.floor(yolo_box[YOLO_BOX_XCENTER_IDX] - buffer_width), 
+                              math.ceil(yolo_box[YOLO_BOX_XCENTER_IDX] + buffer_width))
+    random_y = random.randint(math.floor(yolo_box[YOLO_BOX_YCENTER_IDX] - buffer_height),
+                              math.ceil(yolo_box[YOLO_BOX_YCENTER_IDX] + buffer_height))
+
+    return {"x": random_x, "y": random_y, "category_id": yolo_box[YOLO_BOX_CAT_IDX]}
 
 
 
@@ -94,75 +116,91 @@ def patch_info_to_patch_name(image_name: str, patch_x_min: int, patch_y_min: int
     return patch_name
 
 
-def get_box_centers_in_patch(annotations_in_img: list, box_dims: dict, patch_coords: dict) -> list:
+def get_boxes_in_patch_img_lvl(annotations_in_img: list, patch_coords: dict, box_dims: dict = None) -> list:
     """
-    For a given patch, create a list of the coordinates of all the centers of annotation boxes that 
-    lie within that patch. Annotations are expected to be in the COCO-format.
+    For a given patch, create a list of dictionaries that for each annotation in the patch contain the
+    bounding box center coordinates (at image level), the bounding box dimensions and the class of the annotation.
+    Annotations are expected to be in the COCO-format.
     Arguments: 
         annotations_in_img (list):  list containing dictionaries of annotations (bounding boxes)
                                     in the image the patch was taken from.
-        box_dims (dict):            dicitonary specifying the dimensions of bounding boxes.
         patch_coords (dict):        dictionary specifying the coordinates (in pixel) of the 
                                     patch in question
+        box_dims (dict):            dictionary specifying the dimensions of bounding boxes. If None, 
+                                    the box dimensions will be extracted from the annotations.
     Returns: 
-        A list containing dictironaries with the coordinates (in pixel) of the centers of the boxes that lie within 
-        the provided patch, as well as the corresponding category. 
+        A list containing dictironaries with the coordinates (in pixel) of the box centers, the box dimensions, 
+        and the corresponding class. 
     """
-    patch_box_centers = []
+    patch_boxes = []
     for ann in annotations_in_img:                
         # In the input annotations, boxes are expected as x/y/w/h
         box_x_center = ann['bbox'][COCO_BOX_XMIN_IDX] + (ann['bbox'][COCO_BOX_WIDTH_IDX]/2.0)
         box_y_center = ann['bbox'][COCO_BOX_YMIN_IDX] + (ann['bbox'][COCO_BOX_HEIGHT_IDX]/2.0)
+
+        box_dims_checked = {}
+
+        if box_dims:
+            box_dims_checked["width"] = box_dims["width"]
+            box_dims_checked["height"] = box_dims["height"]
+        else: 
+            box_dims_checked["width"] = ann['bbox'][COCO_BOX_WIDTH_IDX]
+            box_dims_checked["height"] = ann['bbox'][COCO_BOX_HEIGHT_IDX]
         
-        box_x_min = box_x_center - (box_dims["width"]/2.0)
-        box_x_max = box_x_center + (box_dims["width"]/2.0)
-        box_y_min = box_y_center - (box_dims["height"]/2.0)
-        box_y_max = box_y_center + (box_dims["height"]/2.0)
+        box_x_min = box_x_center - (box_dims_checked["width"]/2.0)
+        box_x_max = box_x_center + (box_dims_checked["width"]/2.0)
+        box_y_min = box_y_center - (box_dims_checked["height"]/2.0)
+        box_y_max = box_y_center + (box_dims_checked["height"]/2.0)
         
         patch_contains_box = (patch_coords["x_min"] < box_x_max and box_x_min < patch_coords["x_max"] \
                              and patch_coords["y_min"] < box_y_max and box_y_min < patch_coords["y_max"])
         
         if patch_contains_box:
-            patch_box_centers.append([{"x": box_x_center, "y": box_y_center}, ann['category_id']])
+            patch_boxes.append({"x_center": box_x_center, "y_center": box_y_center, "box_dims": box_dims_checked,
+                                "category_id": ann['category_id']})
     
-    return patch_box_centers
+    return patch_boxes
 
 
 
-def get_boxes_in_patch(annotations_in_img: list, clip_boxes: bool, box_dims: dict, patch_dims: list, 
-                       patch_coords: dict, categories: list) -> tuple[list, list, int, dict]:
+def get_boxes_at_patch_lvl(annotations_in_img: list, clip_boxes: bool, patch_dims: dict, patch_coords: dict, 
+                           categories: list, box_dims: dict = None) -> tuple[list, dict, list, int]:
     """
-    For a given patch, create a list of annotation boxes (as yolo-formatted dictionaries) that 
-    lie within that patch
+    For a given patch, create a list of athe bounding boxes (as yolo-formatted dictionaries and with 
+    patch-level coordinates) that lie within that patch.
     Arguments: 
         annotations_in_img (list):  list containing dictionaries of annotations (bounding boxes)
                                     in the image the patch was taken from.
         clip_boxes (bool):          whether or not to clip boxes that exceed the patch boundaries
-        box_dims (dict):            dict specifying the dimensions of bounding boxes.
         patch_dims (dict):          dict specifying the dimensions of the patch.
         patch_coords (dict):        dict specifying the coordinates (in pixel) of the patch
-        categories:                 list of classes in the datset
+        categories (list):          list of classes in the datset
+        box_dims (dict):            dictionary specifying the dimensions of bounding boxes. If None, 
+                                    the box dimensions will be extracted from the annotations.
     Returns: 
-        1.  a list containing  dictionaries with the coordinates (in pixel) of the bbox centers of the boxes that lie within 
-            the provided patch.
-        2.  a list containing YOLO-formatted bounding boxes that lie within the provided patch. 
-        3.  the number of boxes that were clipped 
-        4.  the class distribution in the patch
+        1.  a list containing YOLO-formatted bounding boxes that lie within the provided patch 
+            (coordinates at patch-level). 
+        2.  the class distribution in the patch
+        3.  a list containing  dictionaries with the coordinates (in pixe and at patch-level) of 
+            the bbox centers
+            that lie within the provided patch.
+        4.  the number of boxes that were clipped 
     """
 
     class_distr_patch = {cat["id"]: 0 for cat in categories}
-    patch_box_centers = get_box_centers_in_patch(annotations_in_img=annotations_in_img, 
-                                                 box_dims=box_dims, patch_coords=patch_coords)
+    patch_boxes = get_boxes_in_patch_img_lvl(annotations_in_img=annotations_in_img, 
+                                             patch_coords=patch_coords, box_dims=box_dims)
     
-    if not patch_box_centers:
+    if not patch_boxes:
         return [], [], 0, class_distr_patch
     
     n_clipped_boxes = 0
     yolo_boxes_patch = []
+    patch_box_centers = []
 
-    for coords_cat in patch_box_centers:
-        x_center_absolute_original = coords_cat[BOX_CENTERS_DICT_IDX]["x"]
-        y_center_absolute_original = coords_cat[BOX_CENTERS_DICT_IDX]["y"]
+    for box_dict in patch_boxes:
+        x_center_absolute_original = box_dict["x_center"]
+        y_center_absolute_original = box_dict["y_center"]
         
         x_center_absolute_patch = x_center_absolute_original - patch_coords["x_min"]
         y_center_absolute_patch = y_center_absolute_original - patch_coords["y_min"]
@@ -178,7 +216,8 @@ def get_boxes_in_patch(annotations_in_img: list, clip_boxes: bool, box_dims: dic
             clipped_box = False
 
             # box size relative to patch size
-            box_dims_rel = {"width": box_dims["width"] / patch_dims["width"], "height": box_dims["height"] / patch_dims["height"]}
+            box_dims_rel = {"width": box_dict["box_dims"]["width"] / patch_dims["width"], 
+                            "height": box_dict["box_dims"]["height"] / patch_dims["height"]}
             
             box_right = x_center_relative + (box_dims_rel["width"] / 2.0)                    
             if box_right > 1.0:
@@ -212,16 +251,18 @@ def get_boxes_in_patch(annotations_in_img: list, clip_boxes: bool, box_dims: dic
                 n_clipped_boxes += 1
         
         # YOLO annotations are category, x_center, y_center, w, h
-        yolo_box = [coords_cat[BOX_CAT_IDX], x_center_relative, y_center_relative, 
+        yolo_box = [box_dict["category_id"], x_center_relative, y_center_relative, 
                     box_dims_rel["width"], box_dims_rel["height"]]
         
         yolo_boxes_patch.append(yolo_box)
-        class_distr_patch[coords_cat[BOX_CAT_IDX]] += 1
+        patch_box_centers.append[{"x": box_dict["x_center"], "y": box_dict["y_center"]}]
+        class_distr_patch[box_dict["category_id"]] += 1
 
-    return patch_box_centers, yolo_boxes_patch, n_clipped_boxes, class_distr_patch
+    return yolo_boxes_patch, class_distr_patch, patch_box_centers, n_clipped_boxes
 
 
-def get_points_in_patch(annotations_in_img: list, patch_dims: list, patch_coords: dict, categories: list) -> tuple[list, list, int, dict]:
+
+def get_points_in_patch(annotations_in_img: list, patch_dims: dict, patch_coords: dict, categories: list) -> tuple[list, dict]:
     """
     For a given patch, create a list of point labels (as yolo-formatted dictionaries) that lie within that patch
     Arguments: 
@@ -229,44 +270,84 @@ def get_points_in_patch(annotations_in_img: list, patch_dims: list, patch_coords
                                     was taken from.
         patch_dims (dict):          dict specifying the dimensions of the patch.
         patch_coords (dict):        dict specifying the coordinates (in pixel) of the patch
-        categories:                 list of classes in the datset
+        categories (list):          list of classes in the datset
     Returns: 
-        1.  a list containing  dictionaries with the coordinates (in pixel) of the point labels that lie within 
-            the provided patch.
-        4.  the class distribution in the patch
+        1.  a list containing  dictionaries with the coordinates (in pixel and at patch level) of the point labels that
+            lie within the provided patch, as well as the corresponding class.
+        2.  the class distribution in the patch
     """
 
     class_distr_patch = {cat["id"]: 0 for cat in categories}
     gt_points = []
+            
+    assert (1 + patch_coords["x_max"] - patch_coords["x_min"]) == patch_dims["width"]
+    assert (1 + patch_coords["y_max"] - patch_coords["y_min"]) == patch_dims["height"]
 
     for ann in annotations_in_img:                
         gt_x = ann["x"]
         gt_y = ann["y"]
         
         patch_contains_pt = (patch_coords["x_min"] < gt_x and gt_x < patch_coords["x_max"] \
-                            and patch_coords["y_min"] < gt_y and gt_y < patch_coords["y_max"])
+                             and patch_coords["y_min"] < gt_y and gt_y < patch_coords["y_max"])
         
         if patch_contains_pt:
-             x_center_absolute_patch = x_center_absolute_original - patch_coords["x_min"]
-        y_center_absolute_patch = y_center_absolute_original - patch_coords["y_min"]
-        
-        assert (1 + patch_coords["x_max"] - patch_coords["x_min"]) == patch_dims["width"]
-        assert (1 + patch_coords["y_max"] - patch_coords["y_min"]) == patch_dims["height"]
-        
-       WARUM??
-       
-        x_center_relative = x_center_absolute_patch / patch_dims["width"]
-        y_center_relative = y_center_absolute_patch / patch_dims["height"]
-            gt_points.append([{"x": gt_x, "y": gt_y}, ann['category_id']])
+            x_center_absolute_patch = gt_x - patch_coords["x_min"]
+            y_center_absolute_patch = gt_y - patch_coords["y_min"]
     
-    return patch_box_centers
+            #x_center_relative = x_center_absolute_patch / patch_dims["width"]
+            #y_center_relative = y_center_absolute_patch / patch_dims["height"]
+            
+            gt_points.append({"x": x_center_absolute_patch, "y": y_center_absolute_patch, "category_id": ann['category_id']})
+            class_distr_patch[ann['category_id']] += 1
+    
+    return gt_points, class_distr_patch
 
-    return patch_box_centers, yolo_boxes_patch, n_clipped_boxes, class_distr_patch
 
 
-def get_annotations_in_patch(boxes_in: bool, boxes_out: bool):
-    # return either boxes or points and if there are box annotations, but we 
-    pass
+def get_annotations_in_patch(annotations_in_img: list, boxes_in: bool, boxes_out: bool, patch_dims: dict, 
+                             patch_coords: dict, categories: list, box_dims: dict, buffer_dims_pct: float, 
+                             clip_boxes: bool)-> tuple[list, dict, tuple[list, None], tuple[list, None]]:
+    """
+    Retrieves the annotations in a given patch. If the ground truth contains bounding boxes, this method can return 
+    point labels that are randomly sampled within a given buffer around the box centers.
+    Arguments: 
+        annotations_in_img (list):  list containing dictionaries of annotations (bounding boxes) in the image 
+                                    the patch was taken from.
+        boxes_in (bbol):            must be set to true if the input annotations contain bounding boxes
+        boxes_out (bool):           if false, return point labels instead of bounding boxes
+        patch_dims (dict):          dict specifying the dimensions of the patch.
+        patch_coords (dict):        dict specifying the coordinates (in pixel) of the patch
+        categories (list):          list of classes in the datset
+        box_dims (dict):            dictionary specifying the dimensions of bounding boxes. If None, 
+                                    the box dimensions will be extracted from the annotations.
+        buffer_dims_pct (float):    percentage of the box-width and -height that is going to be used to 
+                                    create the buffer to sample point labels from. Specifically, the buffer will have
+                                    its center at the box center and will have the dimensions 
+                                    (box_width * buffer_dims_pct), (box_height * buffer_dims_pct).
+        clip_boxes (bool):          whether or not to clip boxes that exceed the patch boundaries
+        
+    """
+
+    # sanity check
+    assert not (not boxes_in and boxes_out)
+
+    if boxes_in: 
+        box_centers, yolo_boxes, n_clipped_boxes, class_distr = get_boxes_at_patch_lvl(annotations_in_img=annotations_in_img,
+                                                                                       clip_boxes=clip_boxes, 
+                                                                                       patch_dims=patch_dims,
+                                                                                       patch_coords=patch_coords, 
+                                                                                       categories=categories,
+                                                                                       box_dims=box_dims)
+        if boxes_out:
+            return yolo_boxes, class_distr, box_centers,  n_clipped_boxes
+        else:
+            gt_points = [randomize_centers(yolo_box=box, buffer_dims_pct=buffer_dims_pct) for box in yolo_boxes]
+            return gt_points, class_distr, None, None
+    else: 
+         gt_points, class_distr = get_points_in_patch(annotations_in_img=annotations_in_img, patch_dims=patch_dims, 
+                                                      patch_coords=patch_coords, categories=categories)
+         return gt_points, class_distr, None, None
+        
     
 
 
@@ -276,8 +357,8 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
                   visualize: bool, dest_dir_imgs: str, dest_dir_txt: str, vis_output_dir: str = None) -> dict:
     """
     Process a given image. Processing consists of dividing the image into patches and assigning each 
-    patch a set of bounding boxes that lie within it. If the corresponding parameters are set accordingly,
-    the patches are saved as image files and bounding box-metadata is written to files in yolo-format (happens
+    patch a set of annotations (boxes or points) that lie within that patch. If the corresponding parameters are
+    set accordingly the patches are saved as image files and bounding box-metadata is written to files in yolo-format (happens
     always for patches that contain bounding boxes, but if desired empty files can be written for empty patches
     as well). 
     Arguments: 
@@ -317,7 +398,7 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
 
     annotations = img_id_to_ann[img["id"]]
     patch_metadata_mapping_img = {}
-    n_boxes_img = 0
+    n_annotations_img = 0
     n_boxes_clipped_img = 0
     n_patches = 0
     
@@ -331,6 +412,7 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
         
         box_centers = []
         boxes = []
+        points = []
         n_boxes_clipped = 0
 
         if not is_negative:
@@ -451,6 +533,15 @@ def vis_processed_img(img: dict, source_dir_img: str, img_id_to_ann: dict, patch
             cv2.rectangle(patch_arr, (x_min, ymin), (xmax, ymax), (0, 255, 0), 1)
 
             cv2.imwrite(str(output_path / f"{patch_dict['patch_name']}.jpg"))
+
+
+
+"""
+box_dims (dict):            dictionary specifying the dimensions of bounding boxes. Can be set manually in
+                                    cases where the annotations contain arbitrary bbox dimensions and only the centers
+                                    are reliable (as is allegedly the case in the Izembek dataset). Otherwise, 
+                                    the box dimensions will be extracted from the annotations.
+"""
 
 
 #TODO: image-level symlinks
