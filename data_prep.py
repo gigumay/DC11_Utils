@@ -46,7 +46,7 @@ def generate_splits(patches_mapping: dict, val_frac: float, test_frac: float, ca
         
         # Make sure we have an annotation file
         src_path_ann = f"{base_dir}/{patch_name}.txt"
-        assert Path.exists(src_path_ann)
+        assert Path.exists(Path(src_path_ann))
         
         # Copy to the place it belongs and collect class distributions
         if patch_data['original_image_id'] in train_patch_ids:
@@ -61,6 +61,8 @@ def generate_splits(patches_mapping: dict, val_frac: float, test_frac: float, ca
             test_patch_names.append(patch_name)
             test_distribution = {**test_distribution, **patch_data["class_distribution"]}
             target_folder = test_dir
+        else:
+            raise ValueError("Unassigned patch!")
         
         target_path_ann = f"{target_folder}/{Path(src_path_ann).name}"
         shutil.move(src_path_ann, target_path_ann)

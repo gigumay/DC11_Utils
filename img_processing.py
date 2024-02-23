@@ -177,7 +177,7 @@ def get_boxes_at_patch_lvl(annotations_in_img: list, patch_dims: dict, patch_coo
                                              patch_coords=patch_coords, box_dims=box_dims)
     
     if not patch_boxes:
-        return [], class_distr_patch, [], 0 
+        return [], class_distr_patch, 0 
     
     n_clipped_boxes = 0
     yolo_boxes_patch = []
