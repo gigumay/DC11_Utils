@@ -31,6 +31,9 @@ INPUT_FORMAT_X_IDX = 1
 PATCH_XSTART_IDX = 0
 PATCH_YSTART_IDX = 1
 
+DEFAULT_BUFFER_PCT = 0.15
+PT_VIS_CIRCLE_RADIUS = 2
+
 
 def randomize_centers(yolo_box: list, patch_dims: dict, buffer_dims_pct: float) -> list:
     """
@@ -60,6 +63,20 @@ def randomize_centers(yolo_box: list, patch_dims: dict, buffer_dims_pct: float) 
     # Yolo expectes relative coordinates
     random_x_rel = random_x / patch_dims["width"]
     random_y_rel = random_y / patch_dims["height"]
+    
+    # make sure points don't lie outside of patch
+    if random_x_rel > 1:
+        overhang = random_x_rel - 1
+        random_x_rel -= overhang
+    if random_x_rel < 0:
+        overhang = abs(random_x_rel)
+        random_x_rel += overhang
+    if random_y_rel > 1:
+        overhang = random_y_rel - 1
+        random_y_rel -= overhang
+    if random_y_rel < 0:
+        overhang = abs(random_y_rel)
+        random_y_rel += overhang
 
     return [yolo_box[YOLO_BOX_CAT_IDX], random_x_rel, random_y_rel]
 
@@ -207,7 +224,7 @@ def get_boxes_at_patch_lvl(annotations_in_img: list, clip_boxes: bool, patch_dim
                                              patch_coords=patch_coords, box_dims=box_dims)
     
     if not patch_boxes:
-        return [], [], 0, class_distr_patch
+        return [], class_distr_patch, [], 0 
     
     n_clipped_boxes = 0
     yolo_boxes_patch = []
@@ -365,6 +382,9 @@ def get_annotations_in_patch(annotations_in_img: list, boxes_in: bool, boxes_out
         else:
             gt_points = [randomize_centers(yolo_box=box, patch_dims=patch_dims, buffer_dims_pct=buffer_dims_pct)
                          for box in yolo_boxes]
+            
+            assert len(yolo_boxes) == len(gt_points)
+
             return gt_points, class_distr, [], 0
     else: 
          gt_points, class_distr = get_points_in_patch(annotations_in_img=annotations_in_img, patch_dims=patch_dims, 
@@ -378,7 +398,7 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
                   boxes_out: bool, img_id_to_ann: dict, patch_dims: dict, patch_start_positions: list, 
                   patch_jpeg_quality: int, write_empty_file_neg: bool, categories: list, visualize: bool, 
                   dest_dir_imgs: tuple[None, str], dest_dir_txt: str, box_dims: dict = None, 
-                  buffer_dims_pct: float = 0.25,  clip_boxes: bool = True, vis_output_dir: str = None) -> dict:
+                  buffer_dims_pct: float = DEFAULT_BUFFER_PCT,  clip_boxes: bool = True, vis_output_dir: str = None) -> dict:
     """
     Process a given image. Processing consists of dividing the image into patches and assigning each 
     patch a set of annotations (boxes or points) that lie within that patch. If the corresponding parameters are
@@ -528,7 +548,7 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
                           patch_dims=patch_dims, boxes_out=boxes_out, output_dir=vis_output_dir)
 
     return {"patches_mapping": patch_metadata_mapping_img, "n_patches": n_patches_img,
-            "n_annotations": n_annotations_img, "n_boxes_clipped":  n_boxes_clipped, 
+            "n_annotations": n_annotations_img, "n_boxes_clipped":  n_boxes_clipped_img, 
             "class_distribution": class_distr_img}
 
 
@@ -562,22 +582,26 @@ def vis_processed_img(img: dict, source_dir_img: str, img_id_to_ann: dict, patch
         
         if boxes_out:
             #cv2 needs int coordinates
-            xmin_img = int(ann["bbox"][COCO_BOX_XMIN_IDX])
-            xmax_img = int(ann["bbox"][COCO_BOX_XMIN_IDX] + ann["bbox"][COCO_BOX_WIDTH_IDX])
-            ymin_img = int(ann["bbox"][COCO_BOX_YMIN_IDX])
-            ymax_img = int(ann["bbox"][COCO_BOX_YMIN_IDX] + ann["bbox"][COCO_BOX_HEIGHT_IDX])
+            xmin_img = round(ann["bbox"][COCO_BOX_XMIN_IDX])
+            xmax_img = round(ann["bbox"][COCO_BOX_XMIN_IDX] + ann["bbox"][COCO_BOX_WIDTH_IDX])
+            ymin_img = round(ann["bbox"][COCO_BOX_YMIN_IDX])
+            ymax_img = round(ann["bbox"][COCO_BOX_YMIN_IDX] + ann["bbox"][COCO_BOX_HEIGHT_IDX])
          
-            cv2.rectangle(img_arr, (xmin_img, ymin_img), (xmax_img, ymax_img), (0, 0, 255), 1)
+            cv2.rectangle(img=img_arr, pt1=(xmin_img, ymin_img), pt2=(xmax_img, ymax_img), 
+                          color=(0, 0, 255), thickness=1)
         else:
-            img_arr[int(ann["point"][INPUT_FORMAT_Y_IDX]), 
-                    int(ann["point"][INPUT_FORMAT_X_IDX])] = (0, 0, 255)
+            x_center = round(ann["bbox"][COCO_BOX_XMIN_IDX] + ann["bbox"][COCO_BOX_WIDTH_IDX] / 2)
+            y_center = round(ann["bbox"][COCO_BOX_YMIN_IDX] + ann["bbox"][COCO_BOX_HEIGHT_IDX] / 2)
+            
+            cv2.circle(img=img_arr, center=(x_center, y_center), radius=PT_VIS_CIRCLE_RADIUS, 
+                       color=(0, 0, 255), thickness=-1)
 
-    cv2.imwrite(str(output_path/f"{img['id']}full_img.jpg"), img_arr)
+    cv2.imwrite(str(output_path/f"full_img_{img['id']}.jpg"), img_arr)
 
     for key in patch_metadata_mapping_img:
         patch_dict = patch_metadata_mapping_img[key]
-        patch_arr = img_arr[patch_dict["patch_y_min"] : patch_dict["patch_y_max"], patch_dict["patch_x_min"] : 
-                            patch_dict["patch_x_max"]]
+        patch_arr = img_arr[patch_dict["patch_y_min"] : patch_dict["patch_y_max"] + 1, patch_dict["patch_x_min"] : 
+                            patch_dict["patch_x_max"] + 1]
 
         if boxes_out:
             gt = patch_dict["boxes"]
@@ -592,16 +616,37 @@ def vis_processed_img(img: dict, source_dir_img: str, img_id_to_ann: dict, patch
                 width_absolute = ann[YOLO_BOX_WIDTH_IDX] * patch_dims["width"]
                 height_absolute = ann[YOLO_BOX_HEIGHT_IDX] * patch_dims["height"]
 
-                xmin_patch = int(x_center_absolute_patch - (width_absolute / 2))
-                xmax_patch = int(x_center_absolute_patch + (width_absolute / 2))
-                ymin_patch = int(y_center_absolute_patch - (height_absolute / 2))
-                ymax_patch = int(y_center_absolute_patch + (height_absolute / 2))
+                xmin_patch = round(x_center_absolute_patch - (width_absolute / 2))
+                xmax_patch = round(x_center_absolute_patch + (width_absolute / 2))
+                ymin_patch = round(y_center_absolute_patch - (height_absolute / 2))
+                ymax_patch = round(y_center_absolute_patch + (height_absolute / 2))
 
-                cv2.rectangle(patch_arr, (xmin_patch, ymin_patch), (xmax_patch, ymax_patch), (0, 255, 0), 1)
+                cv2.rectangle(img=patch_arr, pt1=(xmin_patch, ymin_patch), pt2=(xmax_patch, ymax_patch), 
+                              color=(0, 255, 0), thickness=1)
             else:
-                patch_arr[int(ann["y"] * patch_dims["height"]), 
-                          int(ann["x"] * patch_dims["weight"])] = (0, 255, 0)
+                #convert relative coords to pixel for plotting
+                x_patch = round(ann[YOLO_PT_X_IDX] * patch_dims["width"])
+                y_patch = round(ann[YOLO_PT_Y_IDX] * patch_dims["height"])
+
+                if x_patch == patch_dims["width"]:
+                    x_patch -= 1
+                if y_patch == patch_dims["height"]:
+                    y_patch -= 1
+
+                #check if circle fits into patch
+                draw_circle = x_patch + PT_VIS_CIRCLE_RADIUS < patch_dims["width"] and \
+                              x_patch - PT_VIS_CIRCLE_RADIUS > 0 and \
+                              y_patch + PT_VIS_CIRCLE_RADIUS < patch_dims["height"] and \
+                              y_patch - PT_VIS_CIRCLE_RADIUS > 0
+
+                if draw_circle: 
+                    cv2.circle(img=patch_arr, center=(x_patch, y_patch), radius=PT_VIS_CIRCLE_RADIUS, 
+                               color=(0, 255, 0), thickness=-1)
+                else:
+                    patch_arr[y_patch, x_patch] = (0, 255, 0)
 
             cv2.imwrite(str(output_path / f"{patch_dict['patch_name']}.jpg"), patch_arr)
 
 #TODO: Add funtionality to add empty patches so that negative sampling doesn't rely on images beigng annotated as empty
+#TODO: Add functionality to discard boxes with very large overhang
+#TODO: Remove assertion in line 386
