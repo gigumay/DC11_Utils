@@ -5,40 +5,40 @@ import shutil
 from pathlib import Path
 from tqdm import tqdm
 
-def generate_splits(patches_mapping: dict, val_frac: float, test_frac: float, train_imgs_fn: str, 
-                    val_imgs_fn: str, test_imgs_fn: str, category_id_to_name: dict, base_dir: str,
-                    train_dir: str, val_dir: str, test_dir: str):
-    
+def generate_splits(patches_mapping: dict, val_frac: float, test_frac: float, category_id_to_name: dict, 
+                    base_dir: str, train_dir: str, val_dir: str, test_dir: str) -> dict:
+    random.seed(0)
+
     patch_ids_list = list(patches_mapping.keys())
     
-    n_val_image_ids = int(val_frac*len(patch_ids_list))
-    n_test_image_ids = int(test_frac*len(patch_ids_list))
+    n_val_patches_ids = int(val_frac*len(patch_ids_list))
+    n_test_patches_ids = int(test_frac*len(patch_ids_list))
 
     # write out train-/val-/test-set
     random.shuffle(patch_ids_list)
-    val_image_ids = patch_ids_list[:n_val_image_ids]
-    test_image_ids = patch_ids_list[n_val_image_ids:(n_val_image_ids + n_test_image_ids)]
-    train_image_ids = patch_ids_list[(n_val_image_ids + n_test_image_ids):]
+    val_patch_ids = patch_ids_list[:n_val_patches_ids]
+    test_patch_ids = patch_ids_list[n_val_patches_ids:(n_val_patches_ids + n_test_patches_ids)]
+    train_patch_ids = patch_ids_list[(n_val_patches_ids + n_test_patches_ids):]
 
 
     
-    with open(train_imgs_fn,'w') as f:
-        json.dump(train_image_ids,f,indent=1)
+    with open(f"{train_dir}/train_mapping.json","w") as f:
+        json.dump(train_patch_ids,f,indent=1)
         
-    with open(val_imgs_fn,'w') as f:
-        json.dump(val_image_ids,f,indent=1)
+    with open(f"{val_dir}/val_mapping.json","w") as f:
+        json.dump(val_patch_ids,f,indent=1)
 
-    with open(test_imgs_fn,'w') as f:
-        json.dump(test_image_ids,f,indent=1)
+    with open(f"{test_dir}/test_mapping.json","w") as f:
+        json.dump(test_patch_ids,f,indent=1)
 
 
     # Copy images to train/val folders and collect split statistics
     train_patch_names = []
-    train_patch_classes = {cat: 0 for cat in category_id_to_name.keys()}
+    train_distribution = {cat: 0 for cat in category_id_to_name.keys()}
     val_patch_names = []
-    val_patch_classes = {cat: 0 for cat in category_id_to_name.keys()}
+    val_distribution = {cat: 0 for cat in category_id_to_name.keys()}
     test_patch_names = []
-    test_patch_classes = {cat: 0 for cat in category_id_to_name.keys()}
+    test_distribution = {cat: 0 for cat in category_id_to_name.keys()}
 
     # For each patch
     for patch_name in tqdm(patches_mapping.keys(), total=len(patches_mapping)):
@@ -49,17 +49,17 @@ def generate_splits(patches_mapping: dict, val_frac: float, test_frac: float, tr
         assert Path.exists(src_path_ann)
         
         # Copy to the place it belongs and collect class distributions
-        if patch_data['original_image_id'] in train_image_ids:
+        if patch_data['original_image_id'] in train_patch_ids:
             train_patch_names.append(patch_name)
-            train_patch_classes = {**train_patch_classes, **patch_data["class_distribution"]}
+            train_distribution = {**train_distribution, **patch_data["class_distribution"]}
             target_folder = train_dir
-        elif patch_data['original_image_id'] in val_image_ids:
+        elif patch_data['original_image_id'] in val_patch_ids:
             val_patch_names.append(patch_name)
-            val_patch_classes = {**val_patch_classes, **patch_data["class_distribution"]}
+            val_distribution = {**val_distribution, **patch_data["class_distribution"]}
             target_folder = val_dir
-        elif patch_data['original_image_id'] in test_image_ids:
+        elif patch_data['original_image_id'] in test_patch_ids:
             test_patch_names.append(patch_name)
-            test_patch_classes = {**test_patch_classes, **patch_data["class_distribution"]}
+            test_distribution = {**test_distribution, **patch_data["class_distribution"]}
             target_folder = test_dir
         
         target_path_ann = f"{target_folder}/{Path(src_path_ann).name}"
@@ -86,4 +86,8 @@ def generate_splits(patches_mapping: dict, val_frac: float, test_frac: float, tr
         
         for class_id,class_name in category_id_to_name.items():
             f.write(f"  {class_id}: {class_name.strip()}\n")
+
+    return {"train": {"distribution": train_distribution, "size": len(train_patch_names)},
+            "val": {"distribution": val_distribution, "size": len(val_patch_names)},
+            "test": {"distribution": test_distribution, "size": len(test_patch_names)}}
 

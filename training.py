@@ -1,1 +1,1 @@
-#TODO: Add method for removign old annotation files and copying right ones into yolo folders
+#TODO: Add method for copying imgs into the correct folders

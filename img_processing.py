@@ -2,7 +2,6 @@ import sys
 sys.path.append("/home/giacomo/repos/MegaDetector/md_visualization")
 
 import math
-import random
 import cv2
 
 from pathlib import Path
@@ -352,9 +351,9 @@ def get_annotations_in_patch(annotations_in_img: list, boxes_in: bool, boxes_out
 
 
 def process_image(source_dir_img: str, img: dict, img_width: int, img_height: int, boxes_in: bool, boxes_out: bool, 
-                  img_id_to_ann: dict, patch_dims: dict, patch_start_positions: list, patch_jpeg_quality: int, 
-                  write_empty_file_neg: bool, categories: list, visualize: bool, dest_dir_imgs: tuple[None, str], 
-                  dest_dir_txt: str, box_dims: dict = None, vis_output_dir: str = None) -> dict:
+                  img_id_to_ann: dict, patch_dims: dict, patch_start_positions: list, patch_jpeg_quality: int,
+                  categories: list, visualize: bool, dest_dir_imgs: tuple[None, str], dest_dir_txt: str, 
+                  box_dims: dict = None, vis_output_dir: str = None) -> dict:
     """
     Process a given image. Processing consists of dividing the image into patches and assigning each 
     patch a set of annotations (boxes or points) that lie within that patch. If the corresponding parameters are
@@ -375,7 +374,6 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
         patch_start_positions (list):   list of pixel coordinates specifying the starting positions of the 
                                         patches
         patch_jpeg_quality (int):       quality of the patch-images
-        write_empty_file_neg (bool):    if true, empty yolo-files are created for empty patches
         categories:                     list of classes in the datset
         visualize (bool):               if true, the annotations are drawn into the image and the patches,
                                         which are then written into a specified directory.
