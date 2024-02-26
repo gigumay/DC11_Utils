@@ -31,7 +31,7 @@ PATCH_XSTART_IDX = 0
 PATCH_YSTART_IDX = 1
 
 MAX_OVERHANG_BXS = 0.85
-MAX_OVERHANG_PTS = 0.45
+MAX_OVERHANG_PTS = 0.6
 PT_VIS_CIRCLE_RADIUS = 2
 
 
@@ -208,7 +208,9 @@ def get_boxes_at_patch_lvl(annotations_in_img: list, patch_dims: dict, patch_coo
         box_right = x_center_relative + (box_dims_rel["width"] / 2.0)                    
         if box_right > 1.0:
             overhang = box_right - 1.0
-            if overhang > max_overhang:
+            # check the fraction of the box that exceeds the patch
+            overhang_box_frac = overhang / box_dims_rel["width"]
+            if overhang_box_frac > max_overhang:
                 continue
             clipped_box = True
             box_dims_rel["width"] -= overhang
@@ -217,7 +219,9 @@ def get_boxes_at_patch_lvl(annotations_in_img: list, patch_dims: dict, patch_coo
         box_bottom = y_center_relative + (box_dims_rel["height"] / 2.0)                                        
         if box_bottom > 1.0:
             overhang = box_bottom - 1.0
-            if overhang > max_overhang:
+            # check the fraction of the box that exceeds the patch
+            overhang_box_frac = overhang / box_dims_rel["height"]
+            if overhang_box_frac > max_overhang:
                 continue
             clipped_box = True
             box_dims_rel["height"] -= overhang
@@ -226,7 +230,9 @@ def get_boxes_at_patch_lvl(annotations_in_img: list, patch_dims: dict, patch_coo
         box_left = x_center_relative - (box_dims_rel["width"] / 2.0)
         if box_left < 0.0:
             overhang = abs(box_left)
-            if overhang > max_overhang:
+            # check the fraction of the box that exceeds the patch
+            overhang_box_frac = overhang / box_dims_rel["width"]
+            if overhang_box_frac > max_overhang:
                 continue
             clipped_box = True
             box_dims_rel["width"] -= overhang
@@ -235,7 +241,9 @@ def get_boxes_at_patch_lvl(annotations_in_img: list, patch_dims: dict, patch_coo
         box_top = y_center_relative - (box_dims_rel["height"] / 2.0)
         if box_top < 0.0:
             overhang = abs(box_top)
-            if overhang > max_overhang:
+            # check the fraction of the box that exceeds the patch
+            overhang_box_frac = overhang / box_dims_rel["height"]
+            if overhang_box_frac > max_overhang:
                 continue
             clipped_box = True
             box_dims_rel["height"] -= overhang
@@ -292,7 +300,7 @@ def get_points_in_patch(annotations_in_img: list, patch_dims: dict, patch_coords
             y_coords_relative_patch = y_coords_absolute_patch / patch_dims["height"]
             
             gt_points.append([ann["category_id"], x_coords_relative_patch, y_coords_relative_patch])
-            class_distr_patch[ann['category_id']] += 1
+            class_distr_patch[ann["category_id"]] += 1
     
     return gt_points, class_distr_patch
 
@@ -426,7 +434,8 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
 
         n_boxes_clipped_img += n_boxes_clipped
         n_annotations_img += len(gt)
-        class_distr_img = {**class_distr_img, **patch_distr}
+        for class_id in class_distr_img.keys():
+            class_distr_img[class_id] += patch_distr[class_id]
 
         
         patch_name = patch_info_to_patch_name(img["id"], patch_coords["x_min"], patch_coords["y_min"])
