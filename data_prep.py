@@ -5,8 +5,26 @@ import shutil
 from pathlib import Path
 from tqdm import tqdm
 
+
 def generate_splits(patches_mapping: dict, val_frac: float, test_frac: float, category_id_to_name: dict, 
                     base_dir: str, train_dir: str, val_dir: str, test_dir: str) -> dict:
+    """
+    Generate the training-, validation- and test-split from a dictionary mapping patches to metadata. 
+    The method takes a path to the base directory, where all the patch annotation-files are stored, and moves them 
+    to the correct folders according to the generated splits. 
+    Arguments: 
+        patches_mapping (dict):         dictionary mapping patch_ids to metadata (class_distribution, annotation
+                                        coordinates, etc.)
+        val_frac (float):               fraction of patches to be used for validation
+        test_frac (float):              fraction of patches to be used for testing
+        category_id_to_name (dict):     dictionary mapping category ids to categpry names
+        base_dir (str):                 path to the base directory
+        train_dir (str):                path to the training data directory
+        val_dir (str):                  path to the validation data directory 
+        test_dir (str):                 path to the test data directory
+    Returns:
+        Dictionary containing information (class distribution and size) about the splits
+    """
     random.seed(0)
 
     patch_ids_list = list(patches_mapping.keys())
