@@ -396,7 +396,7 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
                                         the box dimensions will be extracted from the annotations.
         radii (dict):                   dictionary containing the radii for each class. These values will be used as a
                                         distance-threshold (pixel-based Euclidean distance) beyond which detections 
-                                        are onsidered false positive when running localization. 
+                                        are considered false positive when running localization. 
         vis_output_dir (str):           path to the directory where the visualizations will be stored
     Returns: 
         a dictionary containing:    1.  a dictionary mapping patch names to metadata for all bounding boxes 

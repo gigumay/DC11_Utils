@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 
 def generate_splits(patches_mapping: dict, val_frac: float, test_frac: float, category_id_to_name: dict, 
-                    base_dir: str, train_dir: str, val_dir: str, test_dir: str) -> dict:
+                    base_dir: str, train_dir: str, val_dir: str, test_dir: str, radii: dict = None) -> dict:
     """
     Generate the training-, validation- and test-split from a dictionary mapping patches to metadata. 
     The method takes a path to the base directory, where all the patch annotation-files are stored, and moves them 
@@ -22,6 +22,9 @@ def generate_splits(patches_mapping: dict, val_frac: float, test_frac: float, ca
         train_dir (str):                path to the training data directory
         val_dir (str):                  path to the validation data directory 
         test_dir (str):                 path to the test data directory
+        radii (dict):                   dictionary containing the radii for each class. These values will be used as a
+                                        distance-threshold (pixel-based Euclidean distance) beyond which detections 
+                                        are considered false positive when running localization.
     Returns:
         Dictionary containing information (class distribution and size) about the splits
     """
@@ -102,6 +105,11 @@ def generate_splits(patches_mapping: dict, val_frac: float, test_frac: float, ca
         
         for class_id,class_name in category_id_to_name.items():
             f.write(f"  {class_id}: {class_name.strip()}\n")
+        if radii: 
+            f.write("\nradii:\n")
+            for class_id, radius in radii.items():
+                f.write(f"  {class_id}: {radius}\n")
+
 
     return {"train": {"distribution": train_distribution, "size": len(train_patch_ids)},
             "val": {"distribution": val_distribution, "size": len(val_patch_ids)},
