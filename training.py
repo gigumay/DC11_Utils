@@ -46,7 +46,7 @@ def relocate_images(src_dir: str, dest_dir: str) -> int:
 def load_imgs(img_dir: str, ann_dir: str, copy: bool) -> int:
     """
     Executes 'retrieve_imgs()' for a given annotation directory and performs a few
-    sanity checks to ensure that no files were lost. 
+    sanity checks to ensure that no files were lost in case 'copy' is False. 
     Arguments:
         img_dir (str):          path to the directory containing the images
         ann_dir (str):          path to the directory containing the annotation files
@@ -57,7 +57,7 @@ def load_imgs(img_dir: str, ann_dir: str, copy: bool) -> int:
     n_imgs = retrieve_images(img_dir=img_dir, ann_dir=ann_dir, copy=copy)
 
     assert n_imgs == len(list(Path((ann_dir)).glob("*.txt")))
-    assert n_imgs == 0.5 * len(list(Path((ann_dir)).glob("*.*")))
+    assert n_imgs == 0.5 * (len(list(Path((ann_dir)).glob("*.*"))) - 1)
 
     return n_imgs
 
@@ -96,7 +96,7 @@ def ready_yolo_dirs(img_dir: str, base_dir: str, copy: bool, subdirs: list = ["t
     """
     img_counts = []
     for dir in subdirs:
-        img_counts.append(load_imgs(img_dir=img_dir, ann_dir=f"{base_dir}/{dir}"), copy=copy)
+        img_counts.append(load_imgs(img_dir=img_dir, ann_dir=f"{base_dir}/{dir}", copy=copy))
     
     return img_counts
 

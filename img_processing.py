@@ -170,6 +170,8 @@ def get_boxes_at_patch_lvl(annotations_in_img: list, patch_dims: dict, patch_coo
             (coordinates at patch-level). 
         2.  the class distribution in the patch
         3.  the number of boxes that were clipped 
+
+    Note: for clipping boxes torch.clip would probably be the more readable solution
     """
 
     class_distr_patch = {cat: 0 for cat in categories}
@@ -361,7 +363,7 @@ def get_annotations_in_patch(annotations_in_img: list, boxes_in: bool, boxes_out
 def process_image(source_dir_img: str, img: dict, img_width: int, img_height: int, boxes_in: bool, boxes_out: bool, 
                   img_id_to_ann: dict, patch_dims: dict, patch_start_positions: list, patch_jpeg_quality: int,
                   categories: list, visualize: bool, dest_dir_imgs: tuple[None, str], dest_dir_txt: str, 
-                  box_dims: dict = None, vis_output_dir: str = None) -> dict:
+                  box_dims: dict = None, radii: dict = None, vis_output_dir: str = None) -> dict:
     """
     Process a given image. Processing consists of dividing the image into patches and assigning each 
     patch a set of annotations (boxes or points) that lie within that patch. If the corresponding parameters are
@@ -392,6 +394,9 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
                                         cases where the annotations contain arbitrary bbox dimensions and only the centers
                                         are reliable (as is allegedly the case in the Izembek dataset). Otherwise, 
                                         the box dimensions will be extracted from the annotations.
+        radii (dict):                   dictionary containing the radii for each class. These values will be used as a
+                                        distance-threshold (pixel-based Euclidean distance) beyond which detections 
+                                        are onsidered false positive when running localization. 
         vis_output_dir (str):           path to the directory where the visualizations will be stored
     Returns: 
         a dictionary containing:    1.  a dictionary mapping patch names to metadata for all bounding boxes 
@@ -405,6 +410,11 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
     pil_img = visutils.open_image(img_filename)
     assert pil_img.size[0] == img_width
     assert pil_img.size[1] == img_height
+
+    if radii: 
+        # make sure there is a radius for every class
+        assert len(categories) == len(list(radii.keys())) and all(cat in radii.keys() for cat in categories), \
+        f"Found classes {categories}, but raddi only for {list(radii.keys())}"
 
     annotations = img_id_to_ann[img["id"]]
     patch_metadata_mapping_img = {}
@@ -484,7 +494,7 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
                                 f"{ann[YOLO_BOX_YCENTER_IDX]} {ann[YOLO_BOX_WIDTH_IDX]} " \
                                 f"{ann[YOLO_BOX_HEIGHT_IDX]}\n"
                 else:
-                    ann_str = f"{ann[YOLO_PT_CAT_IDX]} {ann[YOLO_PT_X_IDX]} {ann[YOLO_PT_Y_IDX]}\n"
+                    ann_str = f"{ann[YOLO_PT_CAT_IDX]} {radii[ann[YOLO_PT_CAT_IDX]]} {ann[YOLO_PT_X_IDX]} {ann[YOLO_PT_Y_IDX]}\n"
                 
                 f.write(ann_str)
                 
