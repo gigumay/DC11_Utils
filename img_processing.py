@@ -31,7 +31,6 @@ PATCH_XSTART_IDX = 0
 PATCH_YSTART_IDX = 1
 
 MAX_OVERHANG_BXS = 0.85
-MAX_OVERHANG_PTS = 0.6
 PT_VIS_CIRCLE_RADIUS = 2
 
 
@@ -86,7 +85,7 @@ def get_patch_start_positions(img_width: int, img_height: int, patch_dims: dict,
     return patch_start_positions
     
 
-def patch_info_to_patch_name(image_name: str, patch_x_min: int, patch_y_min: int) -> str:
+def patch_info_to_patch_name(image_name: str, patch_x_min: int, patch_y_min: int, is_empty: bool) -> str:
     """
     Generates the name of a patch.
     Arguments: 
@@ -95,10 +94,12 @@ def patch_info_to_patch_name(image_name: str, patch_x_min: int, patch_y_min: int
                             original image
         patch_y_min (int):  y coordinate of the left upper corner of the patch within the 
                             original image 
+        is_empty (bool):    indicates whether the patch is empty
     Returns: 
         string containing the patch name
     """
-    patch_name = f"{image_name}_{str(patch_x_min).zfill(4)}_{str(patch_y_min).zfill(4)}"
+    empty_ext = "_empty" if is_empty else ""
+    patch_name = f"{image_name}_{str(patch_x_min).zfill(4)}_{str(patch_y_min).zfill(4)}{empty_ext}"
     return patch_name
 
 
@@ -265,41 +266,50 @@ def get_boxes_at_patch_lvl(annotations_in_img: list, patch_dims: dict, patch_coo
 
 
 
-def get_points_in_patch(annotations_in_img: list, patch_dims: dict, patch_coords: dict, categories: list) -> tuple[list, dict]:
+def get_points_in_patch(annotations_in_img: list, is_bxs: bool, patch_dims: dict, patch_coords: dict, categories: list,
+                        box_dims: dict = None) -> tuple[list, dict]:
     """
     For a given patch, create a list of point labels (as yolo-formatted dictionaries) that lie within that patch
     Arguments: 
         annotations_in_img (list):  list containing dictionaries of annotations (point labels) in the image the patch
                                     was taken from.
+        is_bxs (bool):              indicates whether the annotations come in the form of boxes or points
         patch_dims (dict):          dict specifying the dimensions of the patch.
         patch_coords (dict):        dict specifying the coordinates (in pixel) of the patch
         categories (list):          list of classes in the datset
+        box_dims (dict):            bounding box dimensions for when box inputs are used
     Returns: 
         1.  a list containing  dictionaries with the coordinates (in pixel and at patch level) of the point labels that
             lie within the provided patch, as well as the corresponding class.
         2.  the class distribution in the patch
     """
-
     class_distr_patch = {cat: 0 for cat in categories}
     gt_points = []
             
     assert (1 + patch_coords["x_max"] - patch_coords["x_min"]) == patch_dims["width"]
     assert (1 + patch_coords["y_max"] - patch_coords["y_min"]) == patch_dims["height"]
 
-    for ann in annotations_in_img:                
-        gt_x = ann["x"]
-        gt_y = ann["y"]
-        
-        patch_contains_pt = (patch_coords["x_min"] < gt_x and gt_x < patch_coords["x_max"] \
-                             and patch_coords["y_min"] < gt_y and gt_y < patch_coords["y_max"])
+    if is_bxs: 
+        ann_list = get_boxes_in_patch_img_lvl(annotations_in_img=annotations_in_img, patch_coords=patch_coords,
+                                              box_dims=box_dims)
+    else:
+        raise(NotImplementedError, "Loading point labels has not been implemented yet!")
+    
+    for ann in ann_list: 
+        gt_x_img = ann["x_center"]
+        gt_y_img = ann["y_center"]
+            
+
+        patch_contains_pt = (patch_coords["x_min"] < gt_x_img and gt_x_img < patch_coords["x_max"] \
+                             and patch_coords["y_min"] < gt_y_img and gt_y_img < patch_coords["y_max"])
         
         if patch_contains_pt:
-            x_coords_absolute_patch = gt_x - patch_coords["x_min"]
-            y_coords_absolute_patch = gt_y - patch_coords["y_min"]
+            gt_x_patch = gt_x_img - patch_coords["x_min"]
+            gt_y_patch = gt_y_img - patch_coords["y_min"]
 
             #Again, relative coordinates 
-            x_coords_relative_patch = x_coords_absolute_patch / patch_dims["width"]
-            y_coords_relative_patch = y_coords_absolute_patch / patch_dims["height"]
+            x_coords_relative_patch = gt_x_patch / patch_dims["width"]
+            y_coords_relative_patch = gt_y_patch / patch_dims["height"]
             
             gt_points.append([ann["category_id"], x_coords_relative_patch, y_coords_relative_patch])
             class_distr_patch[ann["category_id"]] += 1
@@ -330,6 +340,7 @@ def get_annotations_in_patch(annotations_in_img: list, boxes_in: bool, boxes_out
     """
 
     # sanity check
+
     assert not (not boxes_in and boxes_out)
     if boxes_in: 
         yolo_boxes, class_distr, n_clipped_boxes = get_boxes_at_patch_lvl(annotations_in_img=annotations_in_img,
@@ -339,31 +350,23 @@ def get_annotations_in_patch(annotations_in_img: list, boxes_in: bool, boxes_out
         if boxes_out:
             return yolo_boxes, class_distr, n_clipped_boxes
         else:
-            '''
-            When dealing with points, boxes cannot be clipped and thus  much larger parts of 
-            animals that cross patch borders will be excluded and treated as background. To simulate this,
-            I use yolo boxes filtered with a stricter overhang parameter to retrieve the point annotations.
-            '''
-            yolo_boxes, class_distr, _ = get_boxes_at_patch_lvl(annotations_in_img=annotations_in_img,
-                                                                patch_dims=patch_dims, patch_coords=patch_coords, 
-                                                                categories=categories, max_overhang=MAX_OVERHANG_PTS,
-                                                                box_dims=box_dims)
-            gt_points = [[box[YOLO_BOX_CAT_IDX], box[YOLO_BOX_XCENTER_IDX], box[YOLO_BOX_YCENTER_IDX]] for box in yolo_boxes]
-            return gt_points, class_distr, 0
-        
-        
+            gt_points, class_distr = get_points_in_patch(annotations_in_img=annotations_in_img, is_bxs=True, 
+                                                         patch_dims=patch_dims, patch_coords=patch_coords,
+                                                         categories=categories, box_dims=box_dims)
+            return gt_points, class_distr, 0       
     else: 
-         gt_points, class_distr = get_points_in_patch(annotations_in_img=annotations_in_img, patch_dims=patch_dims, 
-                                                      patch_coords=patch_coords, categories=categories)
+         gt_points, class_distr = get_points_in_patch(annotations_in_img=annotations_in_img, is_bxs=False,
+                                                      patch_dims=patch_dims, patch_coords=patch_coords, 
+                                                      categories=categories)
          return gt_points, class_distr, 0
         
     
 
 
 def process_image(source_dir_img: str, img: dict, img_width: int, img_height: int, boxes_in: bool, boxes_out: bool, 
-                  img_id_to_ann: dict, patch_dims: dict, patch_start_positions: list, patch_jpeg_quality: int,
-                  categories: list, visualize: bool, dest_dir_imgs: tuple[None, str], dest_dir_txt: str, 
-                  box_dims: dict = None, radii: dict = None, vis_output_dir: str = None) -> dict:
+                  img_id_to_ann: dict, patch_dims: dict, patch_start_positions: list, n_empties: int, 
+                  patch_jpeg_quality: int, categories: list, visualize: bool, dest_dir_imgs: tuple[None, str], 
+                  dest_dir_txt: str, box_dims: dict = None, radii: dict = None, vis_output_dir: str = None) -> dict:
     """
     Process a given image. Processing consists of dividing the image into patches and assigning each 
     patch a set of annotations (boxes or points) that lie within that patch. If the corresponding parameters are
@@ -383,6 +386,7 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
         patch_dims (dict):              dict specifying the dimensions of the patches.
         patch_start_positions (list):   list of pixel coordinates specifying the starting positions of the 
                                         patches
+        n_empties (int):                the number of empty patches to sample
         patch_jpeg_quality (int):       quality of the patch-images
         categories:                     list of classes in the datset
         visualize (bool):               if true, the annotations are drawn into the image and the patches,
@@ -420,8 +424,10 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
     patch_metadata_mapping_img = {}
     n_annotations_img = 0
     n_boxes_clipped_img = 0
-    n_patches_img = 0
     class_distr_img = {cat: 0 for cat in categories}
+    empty_remaining = n_empties
+    n_non_empty_patches = 0
+    n_empty_patches = 0
 
     for patch in patch_start_positions:
         patch_coords = {"x_min": patch[PATCH_XSTART_IDX], 
@@ -438,18 +444,25 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
                                                                     categories=categories, 
                                                                     box_dims=box_dims)
         
-        # skip empty patches in positive images
         if not gt:
-            continue 
+            if empty_remaining > 0:
+                patch_name = patch_info_to_patch_name(img["id"], patch_coords["x_min"], patch_coords["y_min"],
+                                                      is_empty=True)
+                patch_ann_file = Path(dest_dir_txt) / f"{patch_name}.txt"
+                empty_remaining -= 1
+                n_empty_patches += 1
+            else:
+                continue
+        else:
+            n_boxes_clipped_img += n_boxes_clipped
+            n_annotations_img += len(gt)
+            for class_id in class_distr_img.keys():
+                class_distr_img[class_id] += patch_distr[class_id]
 
-        n_boxes_clipped_img += n_boxes_clipped
-        n_annotations_img += len(gt)
-        for class_id in class_distr_img.keys():
-            class_distr_img[class_id] += patch_distr[class_id]
-
-        
-        patch_name = patch_info_to_patch_name(img["id"], patch_coords["x_min"], patch_coords["y_min"])
-        patch_ann_file = Path(dest_dir_txt) / f"{patch_name}.txt"
+            patch_name = patch_info_to_patch_name(img["id"], patch_coords["x_min"], patch_coords["y_min"],
+                                                  is_empty=False)
+            patch_ann_file = Path(dest_dir_txt) / f"{patch_name}.txt"
+            n_non_empty_patches += 1
         
         assert not patch_ann_file.exists()
         
@@ -499,17 +512,15 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
                 f.write(ann_str)
                 
         assert Path.exists(patch_ann_file)
-
-        n_patches_img += 1
     
     if visualize:
         assert vis_output_dir, "Please provide a path to a directory where visulaizations can be stored!"
         vis_processed_img(img=img, source_dir_img=source_dir_img, img_id_to_ann=img_id_to_ann, patch_metadata_mapping_img=patch_metadata_mapping_img,
                           patch_dims=patch_dims, boxes_out=boxes_out, output_dir=vis_output_dir)
 
-    return {"patches_mapping": patch_metadata_mapping_img, "n_patches": n_patches_img,
-            "n_annotations": n_annotations_img, "n_boxes_clipped":  n_boxes_clipped_img, 
-            "class_distribution": class_distr_img}
+    return {"patches_mapping": patch_metadata_mapping_img, "n_non_empty_patches": n_non_empty_patches,
+            "n_empty_patches": n_empty_patches, "n_annotations": n_annotations_img, 
+            "n_boxes_clipped":  n_boxes_clipped_img, "class_distribution": class_distr_img}
 
 
 
