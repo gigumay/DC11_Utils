@@ -3,6 +3,12 @@ sys.path.append("/home/giacomo/repos/MegaDetector/md_visualization")
 
 import math
 import cv2
+import random 
+import json
+import shutil
+
+from pathlib import Path
+from tqdm import tqdm
 
 from pathlib import Path
 
@@ -45,44 +51,78 @@ def get_patch_start_positions(img_width: int, img_height: int, patch_dims: dict,
     Returns:
         list of starting positions
     """
+   
+    patch_stride = {"x": round(patch_dims["width"]*(1.0-overlap)), "y": round(patch_dims["height"]*(1.0-overlap))}
+
+    
+    assert patch_dims["width"] <= img_width, "Patch width is larger than image width {}"
+    assert patch_dims["height"] <= img_height, "Patch width is larger than image width {}"
+    
+    def add_patch_row(patch_start_positions,y_start):
+        """
+        Add one row to the list of patch start positions, i.e. loop over all columns.
+        """
+        x_start = 0; x_end = x_start + patch_dims["width"] - 1
+        
+        while(True):
+            patch_start_positions.append([x_start,y_start])
+            
+            if x_end == img_width - 1:
+                break
+            
+            # Move one patch to the right
+            x_start += patch_stride["x"]
+            x_end = x_start + patch_dims["width"] - 1
+             
+            # If this patch flows over the edge, add one more patch to cover the pixels at the end
+            if x_end > (img_width - 1):
+                overshoot = (x_end - img_width) + 1
+                x_start -= overshoot
+                x_end = x_start + patch_dims["width"] - 1
+                patch_start_positions.append([x_start,y_start])
+                break
+            
+        return patch_start_positions
+        
     patch_start_positions = []
     
-    # account for overlap between patches
-    overlap_pxs_x = math.ceil(patch_dims["width"] * overlap)
-    overlap_pxs_y = math.ceil(patch_dims["height"] * overlap)
-
-
-    n_x_patches = img_width // (patch_dims["width"] - overlap_pxs_x)
-    # account for additional patch at the edges
-    if img_width - ((patch_dims["width"] - overlap_pxs_x) * n_x_patches) != 0:
-        n_x_patches += 1
-
-    n_y_patches = img_height // (patch_dims["height"] - overlap_pxs_y)
-    if img_height - ((patch_dims["height"] - overlap_pxs_y) * n_y_patches) != 0:
-        n_y_patches += 1
-
-    for i_x_patch in range(n_x_patches):
-        x_start = (patch_dims["width"] - overlap_pxs_x) * i_x_patch
-        x_end = x_start + patch_dims["width"] - 1
-        # if patch overshoots: shift starting point
-        if x_end >= img_width:
-            assert i_x_patch == n_x_patches - 1
-            overshoot = (x_end - img_width) + 1
-            x_start -= overshoot
-
-        for i_y_patch in range(n_y_patches):
-            y_start = (patch_dims["height"] - overlap_pxs_y) * i_y_patch
+    y_start = 0; y_end = y_start + patch_dims["height"] - 1
+    
+    while(True):
+        patch_start_positions = add_patch_row(patch_start_positions,y_start)
+        
+        if y_end == img_height - 1:
+            break
+        
+        # Move one patch down
+        y_start += patch_stride["y"]
+        y_end = y_start + patch_dims["height"] - 1
+        
+        # If this patch flows over the bottom, add one more patch to cover the pixels at the bottom
+        if y_end > (img_height - 1):
+            overshoot = (y_end - img_height) + 1
+            y_start -= overshoot
             y_end = y_start + patch_dims["height"] - 1
-            if y_end >= img_height:
-                assert i_y_patch == n_y_patches - 1
-                overshoot =  (y_end - img_height) + 1
-                y_start -= overshoot
-            patch_start_positions.append([x_start,y_start])
-
-    assert patch_start_positions[-1][PATCH_XSTART_IDX] + patch_dims["width"] == img_width
-    assert patch_start_positions[-1][PATCH_YSTART_IDX] + patch_dims["height"] == img_height
-
+            patch_start_positions = add_patch_row(patch_start_positions,y_start)
+            break
+    
+    for p in patch_start_positions:
+        assert p[0] >= 0 and p[1] >= 0 and p[0] <= img_width and p[1] <= img_height, \
+        f"Patch generation error (illegal patch {p})!"
+        
+    # The last patch should always end at the bottom-right of the image
+    assert patch_start_positions[-1][0] + patch_dims["width"] == img_width, \
+        "Patch generation error (last patch does not end on the right)"
+    assert patch_start_positions[-1][1] + patch_dims["height"] == img_height, \
+        "Patch generation error (last patch does not end at the bottom)"
+    
+    # All patches should be unique
+    patch_start_positions_tuples = [tuple(x) for x in patch_start_positions]
+    assert len(patch_start_positions_tuples) == len(set(patch_start_positions_tuples)), \
+        "Patch generation error (duplicate start position)"
+    
     return patch_start_positions
+
     
 
 def patch_info_to_patch_name(image_name: str, patch_x_min: int, patch_y_min: int, is_empty: bool) -> str:
@@ -365,8 +405,8 @@ def get_annotations_in_patch(annotations_in_img: list, boxes_in: bool, boxes_out
 
 def process_image(source_dir_img: str, img: dict, img_width: int, img_height: int, boxes_in: bool, boxes_out: bool, 
                   img_id_to_ann: dict, patch_dims: dict, patch_start_positions: list, n_empties: int, 
-                  patch_jpeg_quality: int, categories: list, visualize: bool, dest_dir_imgs: tuple[None, str], 
-                  dest_dir_txt: str, box_dims: dict = None, radii: dict = None, vis_output_dir: str = None) -> dict:
+                  patch_jpeg_quality: int, categories: list, visualize: bool, files_output_dir: str, 
+                  box_dims: dict = None, radii: dict = None, vis_output_dir: str = None) -> dict:
     """
     Process a given image. Processing consists of dividing the image into patches and assigning each 
     patch a set of annotations (boxes or points) that lie within that patch. If the corresponding parameters are
@@ -391,9 +431,7 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
         categories:                     list of classes in the datset
         visualize (bool):               if true, the annotations are drawn into the image and the patches,
                                         which are then written into a specified directory.
-        dest_dir_imgs (str):            path to the directory the patch images will be stored in. If None, patches won't
-                                        be stored as images
-        dest_dir_txt (str):             path to the directory the bounding-box metadat files will be stored in
+        files_output_dir (str):         path to the directory where the patches and annotations will be stored.
         box_dims (dict):                dictionary specifying the dimensions of bounding boxes. Can be set manually in
                                         cases where the annotations contain arbitrary bbox dimensions and only the centers
                                         are reliable (as is allegedly the case in the Izembek dataset). Otherwise, 
@@ -421,13 +459,13 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
         f"Found classes {categories}, but raddi only for {list(radii.keys())}"
 
     annotations = img_id_to_ann[img["id"]]
-    patch_metadata_mapping_img = {}
+    pos_patch_metadata_mapping_img = {}
+    neg_patch_metadata_mapping_img = {}
     n_annotations_img = 0
     n_boxes_clipped_img = 0
     class_distr_img = {cat: 0 for cat in categories}
     empty_remaining = n_empties
-    n_non_empty_patches = 0
-    n_empty_patches = 0
+ 
 
     for patch in patch_start_positions:
         patch_coords = {"x_min": patch[PATCH_XSTART_IDX], 
@@ -448,9 +486,20 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
             if empty_remaining > 0:
                 patch_name = patch_info_to_patch_name(img["id"], patch_coords["x_min"], patch_coords["y_min"],
                                                       is_empty=True)
-                patch_ann_file = Path(dest_dir_txt) / f"{patch_name}.txt"
+                patch_ann_file = Path(files_output_dir) / f"{patch_name}.txt"
+                
+                patch_metadata = {
+                    "patch_name": patch_name,
+                    "original_image_id": img["id"],
+                    "patch_x_min": patch_coords["x_min"],
+                    "patch_y_min": patch_coords["y_min"],
+                    "patch_x_max": patch_coords["x_max"],
+                    "patch_y_max": patch_coords["y_max"]
+                }
+        
+                neg_patch_metadata_mapping_img[patch_name] = patch_metadata
+
                 empty_remaining -= 1
-                n_empty_patches += 1
             else:
                 continue
         else:
@@ -461,51 +510,52 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
 
             patch_name = patch_info_to_patch_name(img["id"], patch_coords["x_min"], patch_coords["y_min"],
                                                   is_empty=False)
-            patch_ann_file = Path(dest_dir_txt) / f"{patch_name}.txt"
-            n_non_empty_patches += 1
+            patch_ann_file = Path(files_output_dir) / f"{patch_name}.txt"
+            
+
+            patch_metadata = {
+                "patch_name": patch_name,
+                "original_image_id": img["id"],
+                "patch_x_min": patch_coords["x_min"],
+                "patch_y_min": patch_coords["y_min"],
+                "patch_x_max": patch_coords["x_max"],
+                "patch_y_max": patch_coords["y_max"],
+                "boxes": gt if boxes_out else None,
+                "points": gt if not boxes_out else None,
+                "class_distribution": patch_distr
+            }
+        
+            pos_patch_metadata_mapping_img[patch_name] = patch_metadata
+        
         
         assert not patch_ann_file.exists()
         
-        patch_metadata = {
-           "patch_name": patch_name,
-           "original_image_id": img["id"],
-           "patch_x_min": patch_coords["x_min"],
-           "patch_y_min": patch_coords["y_min"],
-           "patch_x_max": patch_coords["x_max"],
-           "patch_y_max": patch_coords["y_max"],
-           "boxes": gt if boxes_out else None,
-           "points": gt if not boxes_out else None,
-           "class_distribution": patch_distr
-        }
+    
+        '''
+        PIL represents coordinates in a way that is very hard for me to get my head
+        around, such that even though the "right" and "bottom" arguments to the crop()
+        function are inclusive... well, they're not really.
+        
+        https://pillow.readthedocs.io/en/stable/handbook/concepts.html#coordinate-system
+        
+        So we add 1 to the max values.
+        '''
+        patch_im = pil_img.crop((patch_coords["x_min"], patch_coords["y_min"], patch_coords["x_max"] + 1,
+                                patch_coords["y_max"] + 1))
+        assert patch_im.size[0] == patch_dims["width"]
+        assert patch_im.size[1] == patch_dims["height"]
+        
 
-        patch_metadata_mapping_img[patch_name] = patch_metadata
-
-        if dest_dir_imgs:
-            '''
-            PIL represents coordinates in a way that is very hard for me to get my head
-            around, such that even though the "right" and "bottom" arguments to the crop()
-            function are inclusive... well, they're not really.
-            
-            https://pillow.readthedocs.io/en/stable/handbook/concepts.html#coordinate-system
-            
-            So we add 1 to the max values.
-            '''
-            patch_im = pil_img.crop((patch_coords["x_min"], patch_coords["y_min"], patch_coords["x_max"] + 1,
-                                    patch_coords["y_max"] + 1))
-            assert patch_im.size[0] == patch_dims["width"]
-            assert patch_im.size[1] == patch_dims["height"]
-            
-
-            patch_image_file = Path(dest_dir_imgs) / f"{patch_name}.jpg"
-            assert not patch_image_file.exists()
-            patch_im.save(patch_image_file, quality=patch_jpeg_quality)
+        patch_image_file = Path(files_output_dir) / f"{patch_name}.jpg"
+        assert not patch_image_file.exists()
+        patch_im.save(patch_image_file, quality=patch_jpeg_quality)
         
         with open(patch_ann_file, 'w') as f:
             for ann in gt:
                 if boxes_out:
                     ann_str = f"{ann[YOLO_BOX_CAT_IDX]} {ann[YOLO_BOX_XCENTER_IDX]} " \
-                                f"{ann[YOLO_BOX_YCENTER_IDX]} {ann[YOLO_BOX_WIDTH_IDX]} " \
-                                f"{ann[YOLO_BOX_HEIGHT_IDX]}\n"
+                              f"{ann[YOLO_BOX_YCENTER_IDX]} {ann[YOLO_BOX_WIDTH_IDX]} " \
+                              f"{ann[YOLO_BOX_HEIGHT_IDX]}\n"
                 else:
                     ann_str = f"{ann[YOLO_PT_CAT_IDX]} {radii[ann[YOLO_PT_CAT_IDX]]} {ann[YOLO_PT_X_IDX]} {ann[YOLO_PT_Y_IDX]}\n"
                 
@@ -515,12 +565,17 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
     
     if visualize:
         assert vis_output_dir, "Please provide a path to a directory where visulaizations can be stored!"
-        vis_processed_img(img=img, source_dir_img=source_dir_img, img_id_to_ann=img_id_to_ann, patch_metadata_mapping_img=patch_metadata_mapping_img,
+        vis_processed_img(img=img, source_dir_img=source_dir_img, img_id_to_ann=img_id_to_ann, 
+                          patch_metadata_mapping_img=pos_patch_metadata_mapping_img,
                           patch_dims=patch_dims, boxes_out=boxes_out, output_dir=vis_output_dir)
 
-    return {"patches_mapping": patch_metadata_mapping_img, "n_non_empty_patches": n_non_empty_patches,
-            "n_empty_patches": n_empty_patches, "n_annotations": n_annotations_img, 
-            "n_boxes_clipped":  n_boxes_clipped_img, "class_distribution": class_distr_img}
+    return {"pos_patches_mapping": pos_patch_metadata_mapping_img, 
+            "neg_patches_mapping": neg_patch_metadata_mapping_img,
+            "n_non_empty_patches":len(pos_patch_metadata_mapping_img.keys()),
+            "n_empty_patches": len(neg_patch_metadata_mapping_img),
+            "n_annotations": n_annotations_img, 
+            "n_boxes_clipped":  n_boxes_clipped_img, 
+            "class_distribution": class_distr_img}
 
 
 
@@ -619,4 +674,105 @@ def vis_processed_img(img: dict, source_dir_img: str, img_id_to_ann: dict, patch
             cv2.imwrite(str(output_path / f"{patch_dict['patch_name']}.jpg"), patch_arr)
 
 
-#TODO: Add functionality to add empty patches so that negative sampling doesn't rely on images beigng annotated as empty
+def generate_train_val_splits(pos_patches_mapping: dict, neg_patches_mapping: dict, val_frac: float, neg_frac: float, 
+                              category_id_to_name: dict, base_dir: str, train_dir: str, val_dir: str, 
+                              radii: dict = None) -> dict:
+    """
+    Generate the training-, and validation-split from a dictionary mapping patches to metadata. 
+    The method takes a path to the base directory, where all the patch image-, and annotation-files are stored, 
+    and moves them to the correct folders according to the generated splits. 
+    Arguments: 
+        pos_patches_mapping (dict):     dict mapping patch ids to metadata for patches that contain annotations 
+        neg_patches_mapping (dict):     dict mapping patch ids to metadata for empty patches                    
+        val_frac (float):               fraction of patches to be used for validation
+        neg_frac (float):               fraction of negative (empty) samples to add to the training data
+        category_id_to_name (dict):     dictionary mapping category ids to categpry names
+        base_dir (str):                 path to the base directory
+        train_dir (str):                path to the training data directory
+        val_dir (str):                  path to the validation data directory
+        radii (dict):                   dictionary containing the radii for each class. These values will be used as a
+                                        distance-threshold (pixel-based Euclidean distance) beyond which detections 
+                                        are considered false positive when running localization.
+    Returns:
+        Dictionary containing information (class distribution and size) about the splits
+    """
+
+    pos_patches_ids = list(pos_patches_mapping.keys())
+    neg_patches_ids = list(neg_patches_mapping.keys())
+
+    n_val_patches = int(val_frac*len(pos_patches_ids))
+    n_train_patches = len(pos_patches_ids) - n_val_patches
+
+    # add correct amount of negative samples if possible (enough empty patches)
+    desired_total = int(math.floor(n_train_patches / (1 - neg_frac)))
+    n_negs = desired_total - n_train_patches
+    random.shuffle(neg_patches_ids)
+    train_patches_ids_neg = neg_patches_ids[:n_negs] if n_negs < len(neg_patches_ids) else neg_patches_ids
+    negs_not_used = [neg_id for neg_id in neg_patches_ids if neg_id not in train_patches_ids_neg]
+
+    # create splits
+    random.shuffle(pos_patches_ids)
+    val_patches_ids = pos_patches_ids[:n_val_patches]
+    train_patches_ids = pos_patches_ids[n_val_patches:]
+    train_patches_ids.extend(train_patches_ids_neg)
+
+    with open(f"{train_dir}/train_mapping.json","w") as f:
+        json.dump(train_patches_ids,f,indent=1)
+        
+    with open(f"{val_dir}/val_mapping.json","w") as f:
+        json.dump(val_patches_ids,f,indent=1)
+
+
+    # Copy annotation files to train/val/test folders and collect split statistics
+    train_distribution = {cat: 0 for cat in category_id_to_name.keys()}
+    val_distribution = {cat: 0 for cat in category_id_to_name.keys()}
+
+
+    # For each patch
+    for patch_name in tqdm((train_patches_ids + val_patches_ids), total=len(train_patches_ids + val_patches_ids)):
+        
+        # Make sure we have an annotation file
+        src_path_ann = f"{base_dir}/{patch_name}.txt"
+        src_path_img = f"{base_dir}/{patch_name}.jpg"
+        
+        assert Path.exists(Path(src_path_ann)) and Path.exists(Path(src_path_img))
+        
+        # Copy files to the place it belongs and collect class distributions
+        if patch_name in train_patches_ids:
+            if "empty" not in patch_name:
+                for class_id in train_distribution.keys():
+                    train_distribution[class_id] += pos_patches_mapping[patch_name]["class_distribution"][class_id]
+            target_folder = train_dir
+        elif patch_name in val_patches_ids:
+            for class_id in val_distribution.keys():
+                val_distribution[class_id] += pos_patches_mapping[patch_name]["class_distribution"][class_id]
+            target_folder = val_dir
+
+        target_path_ann = f"{target_folder}/{Path(src_path_ann).name}"
+        target_path_img = f"{target_folder}/{Path(src_path_img).name}"
+        shutil.move(src_path_ann, target_path_ann)
+        shutil.move(src_path_img, target_path_img)
+
+    #Generate the YOLO training dataset file
+    with open(f"{base_dir}/dataset.yaml","w") as f:
+        train_dir_rel = Path(train_dir).relative_to(base_dir)
+        val_dir_rel = Path(val_dir).relative_to(base_dir)
+        
+        f.write("# Train/val/test sets\n" \
+                f"path: {base_dir}\n" \
+                f"train: {train_dir_rel}\n" \
+                f"val: {val_dir_rel}\n" \
+                "\n" \
+                "# Classes\n" \
+                "names:\n")
+        
+        for class_id,class_name in category_id_to_name.items():
+            f.write(f"  {class_id}: {class_name.strip()}\n")
+        if radii: 
+            f.write("\nradii:\n")
+            for class_id, radius in radii.items():
+                f.write(f"  {class_id}: {radius}\n")
+
+    return {"train": {"distribution": train_distribution, "size": len(train_patches_ids), "empty": len(train_patches_ids_neg)},
+            "val": {"distribution": val_distribution, "size": len(val_patches_ids)}}, negs_not_used
+
