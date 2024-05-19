@@ -30,6 +30,8 @@ def collect_boxes(predictions: list, patches: list, device: torch.device, patch_
         patches (list):             list containing all patches.
         device (torch.device):      device used for inference.
         patch_output_dir (str):     path to the folder where patch-level predictions can be stored. 
+    Returns:
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor]: the coordinates, confidence scores and classes of the image level predictions
 
     """
 
@@ -66,6 +68,8 @@ def collect_locations(predictions: list, patches: list, device: torch.device, pa
         patches (list):             list containing all patches.
         device (torch.device):      device used for inference.
         patch_output_dir (str):     path to the folder where patch-level predictions can be stored. 
+    Returns:
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor]: the coordinates, confidence scores and classes of the image level predictions
 
     """
 
@@ -103,6 +107,8 @@ def collect_predictions_wrapper(task: str, predictions: list, patches: list, dev
         patches (list):             list containing all patches of an image.
         device (torch.device):      device used for inference.
         patch_output_dir (str):     path to the folder where patch-level predictions can be stored. 
+    Returns:
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor]: the coordinates, confidence scores and classes of the image level predictions
 
     """
     if task == "detect":
