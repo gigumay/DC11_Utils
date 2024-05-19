@@ -12,8 +12,6 @@ from tqdm import tqdm
 
 from pathlib import Path
 
-from globals import *
-
 import visualization_utils as visutils
 
 
