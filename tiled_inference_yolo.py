@@ -17,11 +17,32 @@ from pathlib import Path
 from ultralytics import YOLO
 from PIL import Image
 from ops import loc_nms, generate_radii_t
-from metrics import bbox_iou, loc_dor
+from metrics import bbox_iou, loc_dor, ConfusionMatrix
 
 from processing_utils import *
+from ann_formats import *
 
 PT_VIS_RADIUS = 2
+
+def load_img_gt(annotations: list,  ann_format: str, task: str, device=torch.device, box_dims: dict = None) -> tuple[torch.Tensor, torch.Tensor]:
+    coords_list = []
+    cls_list
+
+    for ann in ann_list:
+        if ann_format == "COCO_WH":
+            xmin = ann["bbox"][BBOX_FORMATS["COCO_WH"]["x_min_idx"]]
+            ymin = ann["bbox"][BBOX_FORMATS["COCO_WH"]["y_min_idx"]]
+            xmax = xmin + ann["bbox"][BBOX_FORMATS["COCO_WH"]["width"]]
+            ymax = ymin + ann["bbox"][BBOX_FORMATS["COCO_WH"]["height"]]
+
+            if task == "detect":
+                coords.append()
+            else:
+                x_center
+                y_center 
+                append
+
+assert shape of tensor is 4/2 times len(ann_list)
 
 
 def collect_boxes(predictions: list, patches: list, device: torch.device, patch_output_dir: tuple[str, None]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -148,10 +169,11 @@ def plot_annotated_img(img_fn: str, coords: torch.Tensor, output_dir: str, pre_n
 
 def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: str, img_files_ext: str, tiling_dir: str, 
                         patch_dims: dict, patch_overlap: float, vis_dir: str, det_dir: str, vis_prob: float, vis_density: int,
-                        patch_quality: int = 95, radii: dict = None, save_pre_output: bool = False, iou_thresh: float = None, 
-                        dor_thresh: float = None, max_offset: int = 1000, rm_tiles: bool = True, save_patch_data: bool = False, 
-                        verbose: bool = False) -> None:
+                        patch_quality: int = 95, radii: dict = None, save_pre_output: bool = False, ann_file: str = None, 
+                        box_dims_training: dict = None, iou_thresh: float = None, dor_thresh: float = None, max_offset: int = 1000, 
+                        rm_tiles: bool = True, save_patch_data: bool = False, verbose: bool = False) -> None:
    
+    # TODO: update
     """
     Perform tiled inference on a directpry of images. 
     Arguments:
@@ -191,12 +213,21 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
         'Illegal tile overlap value {}'.format(patch_overlap)
     
     model = YOLO(model_file)
-    
+   
+    # read file and initialize global confusion matrix to collect evaluation metrics if annotation are provided
+    if ann_file:
+        with open(ann_file, "r") as f:
+            ann_dict = json.load(f)
+
     img_fns = list(Path(imgs_dir).rglob(f"*.{img_files_ext}"))
     counts_sum = {cls_id: 0 for cls_id in class_ids}
     
     print("*** Processing images")
     for fn in tqdm(img_fns, total=len(img_fns)):
+        # If annotations are available, collect evaluation metrics also at the image level 
+        if ann_file:
+            cfm_img = ConfusionMatrix(nc=len(class_ids), task=task)
+            # TODO: load gt 
         im = vis_utils.open_image(fn)
                 
         patch_start_positions = get_patch_start_positions(img_width=im.width, img_height=im.height, patch_dims=patch_dims, 
@@ -279,6 +310,8 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
         # combine coordinates, confidence and class into one tensor
         preds_img_final = torch.hstack((coords[idxs], conf[idxs], cls[idxs]))
 
+        # TODO: pass to conf matrix instance and save to file
+
         # get counts post nms 
         post_nms = preds_img_final.shape[0]
         cls_idx_post, counts_post = torch.unique(preds_img_final[:, -1], return_counts=True)
@@ -305,6 +338,8 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
 
     if rm_tiles:
         shutil.rmtree(tiling_dir) 
+
+    # output conf matrix per image as npy arrayy
 
 
 

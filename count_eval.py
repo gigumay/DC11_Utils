@@ -103,8 +103,6 @@ def compute_errors(gt_counts_dir: str, pred_counts_dir: str, class_ids: list, ou
         # get matching prediction file fior a gt file 
         search_str = fn_gt.split("/")[-1].split(".")[0]
         fn_pred = [pf for pf in pred_files if search_str in pf]
-        
-        assert len(fn_pred) == 1
 
         fn_pred = fn_pred[0]
 
@@ -135,4 +133,12 @@ def compute_errors(gt_counts_dir: str, pred_counts_dir: str, class_ids: list, ou
 
     return summary_dict
 
-    
+def get_eval_metrics():
+    # load numpy arrays 
+    # assemble into df where one row = one image (tp, fp per class)
+    # make plot of global (normalized) cfm 
+    raise NotImplementedError()
+
+def plot_topk_imgs():
+    # given an evaluartion metric (i.e., fp_class) plot the k images with the highest scores
+    raise NotImplementedError()

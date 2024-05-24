@@ -20,7 +20,7 @@ def get_boxes_in_patch_img_lvl(annotations_in_img: list, patch_coords: dict, box
     """
     For a given patch, create a list of dictionaries that for each annotation in the patch contain the
     bounding box center coordinates (at image level), the bounding box dimensions and the class of the annotation.
-    Annotations are expected to be in the COCO-format.
+    Annotations are expected to be in the COCO-format ([xmin, ymin, width, height]).
     Arguments: 
         annotations_in_img (list):  list containing dictionaries of annotations (bounding boxes)
                                     in the image the patch was taken from.
