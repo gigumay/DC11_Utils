@@ -6,10 +6,12 @@ import shutil
 import tqdm
 import json
 import random
+import math
 
 import torch
 import torchvision
 import cv2
+import pandas as pd
 import visualization_utils as vis_utils
 import numpy as np
 
@@ -23,26 +25,44 @@ from processing_utils import *
 from ann_formats import *
 
 PT_VIS_RADIUS = 2
+CLASS_COLORS = {0: (134, 22, 171),
+                1: (204, 18, 204),
+                2: (204, 232, 19),
+                3: (19, 97, 232),
+                4: (0, 255, 0)}
 
-def load_img_gt(annotations: list,  ann_format: str, task: str, device=torch.device, box_dims: dict = None) -> tuple[torch.Tensor, torch.Tensor]:
+
+def load_img_gt(annotations: dict,  ann_format: str, task: str, device=torch.device, box_dims: dict = None) -> tuple[torch.Tensor, torch.Tensor]:
     coords_list = []
-    cls_list
+    cls_list = []
 
-    for ann in ann_list:
+    for ann in annotations:
         if ann_format == "COCO_WH":
             xmin = ann["bbox"][BBOX_FORMATS["COCO_WH"]["x_min_idx"]]
             ymin = ann["bbox"][BBOX_FORMATS["COCO_WH"]["y_min_idx"]]
-            xmax = xmin + ann["bbox"][BBOX_FORMATS["COCO_WH"]["width"]]
-            ymax = ymin + ann["bbox"][BBOX_FORMATS["COCO_WH"]["height"]]
+
+            width = box_dims["width"] if box_dims else ann["bbox"][BBOX_FORMATS["COCO_WH"]["width"]]
+            height = box_dims["height"] if box_dims else ann["bbox"][BBOX_FORMATS["COCO_WH"]["height"]]
 
             if task == "detect":
-                coords.append()
+                xmax = xmin + width
+                ymax = ymin + height
+                coords_list.append([xmin, xmax, ymin, ymax])
             else:
-                x_center
-                y_center 
-                append
+                x_center = xmin + (width / 2.0)
+                y_center = ymin + (height / 2.0)
+                coords_list.append([x_center, y_center])
+        
+        cls_list.append(ann["category_id"])
 
-assert shape of tensor is 4/2 times len(ann_list)
+
+    coords_t = torch.tensor(coords_list, device=device)
+    # sanity check 
+    assert coords_t.shape[1] == len(coords_list[0])
+
+    cls_t = torch.tensor(cls_list, device=device)
+
+    return coords_t, cls_t 
 
 
 def collect_boxes(predictions: list, patches: list, device: torch.device, patch_output_dir: tuple[str, None]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -140,7 +160,9 @@ def collect_predictions_wrapper(task: str, predictions: list, patches: list, dev
         return collect_locations(predictions=predictions, patches=patches, device=device, patch_output_dir=patch_output_dir)
     
 
-def plot_annotated_img(img_fn: str, coords: torch.Tensor, output_dir: str, pre_nms: bool = False,) -> None:
+def plot_annotated_img(img_fn: str, coords: torch.Tensor, cls: torch.Tensor, output_dir: str, pre_nms: bool = False,) -> None:
+    # TODO: comments
+    
     """
     Plot an image and visualize the predictions it contains.
     Arguments:
@@ -156,11 +178,11 @@ def plot_annotated_img(img_fn: str, coords: torch.Tensor, output_dir: str, pre_n
     for i in range(coords.shape[0]):
         if boxes:
             cv2.rectangle(img=img_arr, pt1=(int(round(coords[i, 0].item())), int(round(coords[i, 1].item()))),
-                          pt2=(int(round(coords[i, 2].item())), int(round(coords[i, 3].item()))), color=(0, 255, 0), 
+                          pt2=(int(round(coords[i, 2].item())), int(round(coords[i, 3].item()))), color=CLASS_COLORS[cls[i]], 
                           thickness=1)
         else:
             cv2.circle(img=img_arr, center=(int(round(coords[i, 0].item())), int(round(coords[i, 1].item()))),
-                       radius=PT_VIS_RADIUS, color=(0, 255, 0), thickness=-1)
+                       radius=PT_VIS_RADIUS, color=CLASS_COLORS[cls[i]], thickness=-1)
 
     output_ext = "_pre_nms" if pre_nms else ""
             
@@ -168,10 +190,11 @@ def plot_annotated_img(img_fn: str, coords: torch.Tensor, output_dir: str, pre_n
 
 
 def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: str, img_files_ext: str, tiling_dir: str, 
-                        patch_dims: dict, patch_overlap: float, vis_dir: str, det_dir: str, vis_prob: float, vis_density: int,
-                        patch_quality: int = 95, radii: dict = None, save_pre_output: bool = False, ann_file: str = None, 
-                        box_dims_training: dict = None, iou_thresh: float = None, dor_thresh: float = None, max_offset: int = 1000, 
-                        rm_tiles: bool = True, save_patch_data: bool = False, verbose: bool = False) -> None:
+                        patch_dims: dict, patch_overlap: float, vis_dir: str, det_dir: str, vis_prob: float = -1.0, 
+                        vis_density: int = math.inf, vis_dict: list = None, patch_quality: int = 95, radii: dict = None, 
+                        save_pre_output: bool = False, ann_file: str = None, ann_format: str = None, 
+                        box_dims_training: dict = None, iou_thresh: float = None, dor_thresh: float = None, 
+                        max_offset: int = 1000, rm_tiles: bool = True, save_patch_data: bool = False, verbose: bool = False) -> None:
    
     # TODO: update
     """
@@ -224,10 +247,7 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
     
     print("*** Processing images")
     for fn in tqdm(img_fns, total=len(img_fns)):
-        # If annotations are available, collect evaluation metrics also at the image level 
-        if ann_file:
-            cfm_img = ConfusionMatrix(nc=len(class_ids), task=task)
-            # TODO: load gt 
+
         im = vis_utils.open_image(fn)
                 
         patch_start_positions = get_patch_start_positions(img_width=im.width, img_height=im.height, patch_dims=patch_dims, 
@@ -278,7 +298,6 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
         coords, conf, cls = collect_predictions_wrapper(task=task, predictions=predictions, patches=patches, 
                                                         device=model.device, patch_output_dir=patch_output_dir)
         
-        
         # get counts before nms
         pre_nms = coords.shape[0]
         cls_idx_pre, counts_pre = torch.unique(cls.squeeze(1), return_counts=True)
@@ -292,9 +311,13 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
 
         visualize = (random.randint(0, 1000) / 1000 <= vis_prob) or pre_nms >= vis_density
 
+        if vis_dict:
+            for key in vis_dict.keys():
+                if fn.stem in vis_dict[key]:
+                    visualize = True
+
         if visualize and save_pre_output:
             plot_annotated_img(img_fn=str(fn), coords=coords, pre_nms=True, output_dir=vis_dir)
-
 
         # add offset to apply NMS separately to different classes
         c = cls * max_offset
@@ -309,8 +332,21 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
 
         # combine coordinates, confidence and class into one tensor
         preds_img_final = torch.hstack((coords[idxs], conf[idxs], cls[idxs]))
+        
+        # If annotations are available, collect evaluation metrics also at the image level 
+        if ann_file:
+            cfm_img = ConfusionMatrix(nc=len(class_ids), task=task)
+            gt_coords, gt_cls = load_img_gt(annotations=ann_dict[fn.name], task=task, ann_format=ann_format, device=coords.device, 
+                                            box_dims=box_dims_training)
+            
+            if task == "detect":
+                cfm_img.process_batch(detections=preds_img_final, gt_bboxes=gt_coords, gt_cls=gt_cls)
+            else:
+                radii_t = generate_radii_t(radii=radii, cls=gt_cls)
+                cfm_img.process_batch_loc(localizations=preds_img_final, gt_locs=gt_coords, gt_cls=gt_cls, radii=radii_t)
 
-        # TODO: pass to conf matrix instance and save to file
+            with open(f"{det_dir}/{fn.stem}_cfm.npy", "wb") as f:
+                np.save(f, cfm_img.matrix)
 
         # get counts post nms 
         post_nms = preds_img_final.shape[0]
@@ -330,7 +366,7 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
             counts_sum[class_idx] += n
 
         if visualize:
-            plot_annotated_img(img_fn=str(fn), coords=coords[idxs], pre_nms=False, output_dir=vis_dir)
+            plot_annotated_img(img_fn=str(fn), coords=coords[idxs], cls=cls[idxs], pre_nms=False, output_dir=vis_dir)
 
     # save counts
     with open(f"{Path(det_dir).parent}/counts_total.json", "w") as f:
@@ -338,9 +374,6 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
 
     if rm_tiles:
         shutil.rmtree(tiling_dir) 
-
-    # output conf matrix per image as npy arrayy
-
 
 
 def greedy_nmm_bxs_SAHI(box_coords: torch.Tensor, scores: torch.Tensor, match_threshold: float):
@@ -618,3 +651,4 @@ def run_tiled_inference_SAHI(model_file: str, task: str, class_ids: list, imgs_d
         shutil.rmtree(tiling_dir) 
 
             
+# TODO: potentially add cfm to aggregate predictions per patch to then compare to image cfm after stitching

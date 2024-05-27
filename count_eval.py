@@ -1,6 +1,14 @@
+import sys 
+sys.path.append("/home/giacomo/projects/P0_YOLOcate/ultralytics/utils")
+
 import json
 from pathlib import Path
+import numpy as np
 import pandas as pd
+
+from metrics import ConfusionMatrix
+from tiled_inference_yolo import plot_annotated_img
+
 
 
 def get_test_counts(ann_file: str, class_ids: list) -> None:
@@ -133,12 +141,66 @@ def compute_errors(gt_counts_dir: str, pred_counts_dir: str, class_ids: list, ou
 
     return summary_dict
 
-def get_eval_metrics():
-    # load numpy arrays 
-    # assemble into df where one row = one image (tp, fp per class)
-    # make plot of global (normalized) cfm 
-    raise NotImplementedError()
 
-def plot_topk_imgs():
-    # given an evaluartion metric (i.e., fp_class) plot the k images with the highest scores
-    raise NotImplementedError()
+
+def get_eval_metrics(dets_dir: str, class_ids: list, class_names: list, task: str, output_dir: str = None, k: int = 3) -> None:
+    # TODO: comments 
+
+    cfm_glob = np.zeros((len(class_ids) + 1, len(class_ids) + 1))
+    df_columns = [[f"{cls_id}_tp", f"{cls_id}_fp", f"{cls_id}_fn", f"{cls_id}_total"] for cls_id in class_ids]
+    df_columns.append(["backgorund_tp", "background_fp", "backgorund_fn", "background_total"])
+    df_columns_flat = ["fn"]
+    df_columns_flat.extend([col for class_cols in df_columns for col in class_cols])
+    preds_df = pd.DataFrame(columns=df_columns_flat)
+
+    for cfm in Path(dets_dir).rglob("*.npy"):
+        cfm_img = np.load(cfm)
+
+        # accumulate global cfm
+        cfm_glob += cfm_img
+        
+        # copied from ultralytics repo
+        tp = cfm_img.diagonal()
+        fp = cfm.sum(1) - tp 
+        fn = cfm.sum(0) - tp
+        total = tp + fp 
+
+        # assemble dict to update dataframe
+        row_dict = {"fn": cfm.stem}
+
+        for cls_id in class_ids:
+            cls_dict = {f"{cls_id}_tp": tp[cls_id], f"{fp}_fp": fp[cls_id], f"{cls_id}_fn": fn[cls_id], f"{cls_id}_total": total[cls_id]}
+
+            row_dict.update(cls_dict)
+
+        bg_dict = {f"background_tp": tp[len(class_ids)], 
+                   f"background_fp": fp[len(class_ids)], 
+                   f"background_fn": fn[len(class_ids)], 
+                   f"background_total": total[len(class_ids)]}      
+
+        row_dict.update(bg_dict)  
+
+        row_df = pd.DataFrame(row_dict)
+        preds_df = pd.concat([preds_df, row_df], ignore_index=True)
+
+    output_path = output_dir if output_dir else dets_dir
+
+    preds_df.to_excel(f"{output_path}/pred_stats_ovrall.xlsx")
+
+    cfm_obj = ConfusionMatrix(nc=len(class_ids), task=task)
+    cfm_obj.matrix = cfm_glob
+
+    cfm_obj.plot(save_dir=f"output_path", names=class_names)
+    cfm_obj.plot(normalize=False, save_dir=f"output_path", names=class_names)
+
+    topk_dict = {}
+
+    for col in list(preds_df.columns):
+        if col != "fn":
+            topk = preds_df.sort_values(by=col, ascending=False).head(k)
+            fns = topk["fn"].to_list()
+            topk_dict[col] = fns
+
+    with open(f"{output_path}/topk.json") as f:
+        json.dump(topk_dict, f)
+

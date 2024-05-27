@@ -15,7 +15,6 @@ from pathlib import Path
 import visualization_utils as visutils
 
 
-
 def get_boxes_in_patch_img_lvl(annotations_in_img: list, patch_coords: dict, box_dims: dict = None) -> list:
     """
     For a given patch, create a list of dictionaries that for each annotation in the patch contain the
@@ -32,6 +31,7 @@ def get_boxes_in_patch_img_lvl(annotations_in_img: list, patch_coords: dict, box
         A list containing dictironaries with the coordinates (in pixel) of the box centers, the box dimensions, 
         and the corresponding class. 
     """
+    # TODO: define and implement different bounding box formats
     patch_boxes = []
     for ann in annotations_in_img:                
         # In the input annotations, boxes are expected as x/y/w/h
