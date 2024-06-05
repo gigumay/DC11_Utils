@@ -9,13 +9,13 @@ import shutil
 
 from pathlib import Path
 from tqdm import tqdm
-
 from pathlib import Path
+from ann_formats import *
 
 import visualization_utils as visutils
 
 
-def get_boxes_in_patch_img_lvl(annotations_in_img: list, patch_coords: dict, box_dims: dict = None) -> list:
+def get_boxes_in_patch_img_lvl(annotations_in_img: list, ann_format: str, patch_coords: dict, box_dims: dict = None) -> list:
     """
     For a given patch, create a list of dictionaries that for each annotation in the patch contain the
     bounding box center coordinates (at image level), the bounding box dimensions and the class of the annotation.
@@ -23,6 +23,7 @@ def get_boxes_in_patch_img_lvl(annotations_in_img: list, patch_coords: dict, box
     Arguments: 
         annotations_in_img (list):  list containing dictionaries of annotations (bounding boxes)
                                     in the image the patch was taken from.
+        ann_format (str):           format of the annotations. 
         patch_coords (dict):        dictionary specifying the coordinates (in pixel) of the 
                                     patch in question
         box_dims (dict):            dictionary specifying the dimensions of bounding boxes. If None, 
@@ -31,12 +32,11 @@ def get_boxes_in_patch_img_lvl(annotations_in_img: list, patch_coords: dict, box
         A list containing dictironaries with the coordinates (in pixel) of the box centers, the box dimensions, 
         and the corresponding class. 
     """
-    # TODO: define and implement different bounding box formats
     patch_boxes = []
     for ann in annotations_in_img:                
         # In the input annotations, boxes are expected as x/y/w/h
-        box_x_center = ann['bbox'][COCO_BOX_XMIN_IDX] + (ann['bbox'][COCO_BOX_WIDTH_IDX]/2.0)
-        box_y_center = ann['bbox'][COCO_BOX_YMIN_IDX] + (ann['bbox'][COCO_BOX_HEIGHT_IDX]/2.0)
+        box_x_center = ann['bbox'][BBOX_FORMATS[ann_format]["x_min_idx"]] + (ann['bbox'][BBOX_FORMATS[ann_format]["width_idx"]]/2.0)
+        box_y_center = ann['bbox'][BBOX_FORMATS[ann_format]["y_min_idx"]] + (ann['bbox'][BBOX_FORMATS[ann_format]["height_idx"]]/2.0)
 
         box_dims_checked = {}
 
@@ -44,8 +44,8 @@ def get_boxes_in_patch_img_lvl(annotations_in_img: list, patch_coords: dict, box
             box_dims_checked["width"] = box_dims["width"]
             box_dims_checked["height"] = box_dims["height"]
         else: 
-            box_dims_checked["width"] = ann['bbox'][COCO_BOX_WIDTH_IDX]
-            box_dims_checked["height"] = ann['bbox'][COCO_BOX_HEIGHT_IDX]
+            box_dims_checked["width"] = ann['bbox'][BBOX_FORMATS[ann_format]["width_idx"]]
+            box_dims_checked["height"] = ann['bbox'][BBOX_FORMATS[ann_format]["height_idx"]]
         
         box_x_min = box_x_center - (box_dims_checked["width"]/2.0)
         box_x_max = box_x_center + (box_dims_checked["width"]/2.0)

@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 
 from metrics import ConfusionMatrix
-from tiled_inference_yolo import plot_annotated_img
 
 
 
@@ -60,28 +59,6 @@ def get_test_counts(ann_file: str, class_ids: list) -> None:
         json.dump(total_counts, f, indent=1)
 
 
-def get_total_counts_SAHI(sahi_results: str, class_ids: list) -> None:
-    """
-    Collect total counts from SAHI tiled inference output.
-    Arguments:
-        sahi_results (str):       path to the sahi result file
-        class_ids (list):         list of integer class ids. 
-    Returns:
-        None
-    """
-
-    with open(sahi_results, "r") as f:
-        pred_dict = json.load(f)
-
-    total_counts = {cls_id: 0 for cls_id in class_ids}
-
-    for pred in pred_dict:
-        total_counts[pred["category_id"]] += 1
-    
-    output_fn = f"{Path(sahi_results).parent}/counts_total.json"
-    with open(output_fn, "w") as f:
-        json.dump(total_counts, f, indent=1)
-
     
 
 def compute_errors(gt_counts_dir: str, pred_counts_dir: str, class_ids: list, output_dir: str) -> dict:
@@ -108,7 +85,7 @@ def compute_errors(gt_counts_dir: str, pred_counts_dir: str, class_ids: list, ou
 
     for fn_gt in gt_files:
         
-        # get matching prediction file fior a gt file 
+        # get matching prediction file for a gt file 
         search_str = fn_gt.split("/")[-1].split(".")[0]
         fn_pred = [pf for pf in pred_files if search_str in pf]
 
@@ -144,15 +121,30 @@ def compute_errors(gt_counts_dir: str, pred_counts_dir: str, class_ids: list, ou
 
 
 def get_eval_metrics(dets_dir: str, class_ids: list, class_names: list, task: str, output_dir: str = None, k: int = 3) -> None:
-    # TODO: comments 
+    """
+    Aggregate image level confusion matrices  into a global confusion matrix. Also generates a .csv file that for each image 
+    contains the evaluation metrics per class, and a .json file that for each metric contains the highests scoring filename.
+    Arguments: 
+        dets_dir (str):         path to the directory containing the image level confusion matrices
+        class_ids (list):       list of class ids
+        class_names (list):     class names that match the ids
+        task (str):             task string. can be 'detect' or 'locate'.
+        output_dir (str):       path to a folder where the method's output can be stored. 
+        k (int):                indicates the number of images to select per evaluation metric. E.g., when k=3, 
+                                the 3 highest scoring images per evaluation metric will be selected and put into 
+                                the output. 
+    """
 
+    # initilaize the global confusion matrix
     cfm_glob = np.zeros((len(class_ids) + 1, len(class_ids) + 1))
+    # initialize the global data frame
     df_columns = [[f"{cls_id}_tp", f"{cls_id}_fp", f"{cls_id}_fn", f"{cls_id}_total"] for cls_id in class_ids]
     df_columns.append(["backgorund_tp", "background_fp", "backgorund_fn", "background_total"])
     df_columns_flat = ["fn"]
     df_columns_flat.extend([col for class_cols in df_columns for col in class_cols])
     preds_df = pd.DataFrame(columns=df_columns_flat)
 
+    # aggregate image level matrices
     for cfm in Path(dets_dir).rglob("*.npy"):
         cfm_img = np.load(cfm)
 
@@ -161,37 +153,36 @@ def get_eval_metrics(dets_dir: str, class_ids: list, class_names: list, task: st
         
         # copied from ultralytics repo
         tp = cfm_img.diagonal()
-        fp = cfm.sum(1) - tp 
-        fn = cfm.sum(0) - tp
+        fp = cfm_img.sum(1) - tp 
+        fn = cfm_img.sum(0) - tp
         total = tp + fp 
 
         # assemble dict to update dataframe
-        row_dict = {"fn": cfm.stem}
+        row_dict = {"fn": "_".join(str(cfm.stem).split("_")[:-1])}
 
         for cls_id in class_ids:
-            cls_dict = {f"{cls_id}_tp": tp[cls_id], f"{fp}_fp": fp[cls_id], f"{cls_id}_fn": fn[cls_id], f"{cls_id}_total": total[cls_id]}
-
+            cls_dict = {f"{cls_id}_tp": [tp[cls_id]], f"{cls_id}_fp": [fp[cls_id]], f"{cls_id}_fn": [fn[cls_id]], f"{cls_id}_total": [total[cls_id]]}
             row_dict.update(cls_dict)
 
-        bg_dict = {f"background_tp": tp[len(class_ids)], 
-                   f"background_fp": fp[len(class_ids)], 
-                   f"background_fn": fn[len(class_ids)], 
-                   f"background_total": total[len(class_ids)]}      
+        bg_dict = {f"background_tp": [tp[len(class_ids)]], 
+                   f"background_fp": [fp[len(class_ids)]], 
+                   f"background_fn": [fn[len(class_ids)]], 
+                   f"background_total": [total[len(class_ids)]]}      
 
         row_dict.update(bg_dict)  
 
         row_df = pd.DataFrame(row_dict)
         preds_df = pd.concat([preds_df, row_df], ignore_index=True)
 
-    output_path = output_dir if output_dir else dets_dir
+    output_path = output_dir if output_dir else Path(dets_dir).parent
 
     preds_df.to_excel(f"{output_path}/pred_stats_ovrall.xlsx")
 
     cfm_obj = ConfusionMatrix(nc=len(class_ids), task=task)
     cfm_obj.matrix = cfm_glob
 
-    cfm_obj.plot(save_dir=f"output_path", names=class_names)
-    cfm_obj.plot(normalize=False, save_dir=f"output_path", names=class_names)
+    cfm_obj.plot(save_dir=output_path, names=class_names)
+    cfm_obj.plot(normalize=False, save_dir=output_path, names=class_names)
 
     topk_dict = {}
 
@@ -201,6 +192,6 @@ def get_eval_metrics(dets_dir: str, class_ids: list, class_names: list, task: st
             fns = topk["fn"].to_list()
             topk_dict[col] = fns
 
-    with open(f"{output_path}/topk.json") as f:
+    with open(f"{output_path}/topk_by_metric.json", "w") as f:
         json.dump(topk_dict, f)
 
