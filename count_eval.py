@@ -119,6 +119,89 @@ def compute_errors(gt_counts_dir: str, pred_counts_dir: str, class_ids: list, ou
     return summary_dict
 
 
+def collect_img_counts_SAHI(SAHI_preds_file: str, SAHI_dataset_file: str, class_ids: list) -> dict:
+    """
+    Collect image-level counts form the SAHI inference output file.
+    Arguments:
+        SAHI_preds_file (str):      path to the SAHI inference output
+        SAHI_dataset_file (str):    path to the SAHI dataset file, which normally is generated before inference
+        class_ids (list):           list of class ids 
+    """
+
+    with open(SAHI_dataset_file, "r") as ds:
+        data_dict = json.load(ds)
+        
+    with open(SAHI_preds_file) as p:
+        preds_list = json.load(p)
+
+    counts_dict = {}
+
+    for img in data_dict["images"]:
+        img_id = img["id"]
+        img_key = img["file_name"].split("/")[-1].split(".")[0]
+
+        img_dict = {cls_id: 0 for cls_id in class_ids}
+
+        for pred in preds_list:
+            if pred["image_id"] == img_id:
+                img_dict[pred["category_id"]] += 1
+
+        counts_dict[img_key] = img_dict
+
+    return counts_dict
+
+
+def compute_errors_SAHI(gt_counts_dir: str, SAHI_preds_file: str, SAHI_dataset_file: str, class_ids: list, output_dir: str) -> dict:
+    """
+    Given a directory containing .json files of ground truth counts of an image set, and s SAHI inference output file,
+    compute the MAE and MSE. Also outputs an excel sheet containing the count differences per image.
+    Arguments:
+        gt_counts_dir (str):        path to the directory containing the gt counts.
+        AHI_preds_file (str):      path to the SAHI inference output
+        SAHI_dataset_file (str):    path to the SAHI dataset file, which normally is generated before inference
+        class_ids (list):           list of class ids 
+        output_dir (str):           path to a folder where the output can be stored.
+    Returns:
+        dictionary containing the MAE and MSE per class. 
+    """
+    gt_files = [str(path) for path in Path(gt_counts_dir).rglob("*.json")]
+    img_counts_SAHI = collect_img_counts_SAHI(SAHI_preds_file=SAHI_preds_file, SAHI_dataset_file=SAHI_dataset_file, class_ids=class_ids)
+
+    # make empty df to collect count differences
+    df_cols = ["fn"]
+    df_cols.extend([str(cls_id) for cls_id in class_ids])
+    count_diffs_df = pd.DataFrame(columns=df_cols)
+
+    for fn_gt in gt_files:
+        img_name = fn_gt.split("/")[-1].split(".")[0]
+
+        with open(fn_gt, "r") as gt:
+            gt_dict = json.load(gt)
+
+        # SAHI counts for that image
+        counts_SAHI = img_counts_SAHI[img_name]
+
+        # get difference and put into df
+        diffs = {str(cls_id): [gt_dict[str(cls_id)] - counts_SAHI[cls_id]] for cls_id in class_ids}
+        diffs["fn"] = [img_name]
+        row_df = pd.DataFrame(diffs)
+        count_diffs_df = pd.concat([count_diffs_df, row_df], ignore_index=True)
+
+    # get overall MAE and MSE per class 
+    summary_dict = {cls_id: {"MAE": count_diffs_df[f"{cls_id}"].abs().sum() / count_diffs_df.shape[0],
+                             "MSE": (count_diffs_df[f"{cls_id}"] ** 2).sum() / count_diffs_df.shape[0]} for cls_id in class_ids}
+    
+    # output
+    with open(f"{output_dir}/errors.json", "w") as f:
+        json.dump(summary_dict, f, indent=1)
+
+    count_diffs_df.to_excel(f"{output_dir}/count_diffs.xlsx")
+
+    return summary_dict
+
+
+
+
 
 def get_eval_metrics(dets_dir: str, class_ids: list, class_names: list, task: str, output_dir: str = None, k: int = 3) -> None:
     """
