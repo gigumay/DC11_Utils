@@ -300,3 +300,27 @@ def run_tiled_inference_SAHI(model_file: str, task: str, class_ids: list, imgs_d
     if rm_tiles:
         shutil.rmtree(tiling_dir) 
 
+
+
+
+def get_total_counts_SAHI(sahi_results: str, class_ids: list) -> None:
+    """
+    Collect total counts from SAHI tiled inference output.
+    Arguments:
+        sahi_results (str):       path to the sahi result file
+        class_ids (list):         list of integer class ids. 
+    Returns:
+        None
+    """
+
+    with open(sahi_results, "r") as f:
+        pred_dict = json.load(f)
+
+    total_counts = {cls_id: 0 for cls_id in class_ids}
+
+    for pred in pred_dict:
+        total_counts[pred["category_id"]] += 1
+    
+    output_fn = f"{Path(sahi_results).parent}/counts_total.json"
+    with open(output_fn, "w") as f:
+        json.dump(total_counts, f, indent=1)

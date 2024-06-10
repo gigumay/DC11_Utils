@@ -202,11 +202,11 @@ def plot_annotated_img(img_fn: str, coords: torch.Tensor, cls: torch.Tensor, out
     assert cv2.imwrite(f"{output_dir}/{Path(img_fn).stem}{output_ext}.jpg", img_arr), "Plotting failed!"
 
 
-def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: str, img_files_ext: str, tiling_dir: str, 
-                        patch_dims: dict, patch_overlap: float, vis_dir: str, det_dir: str, iou_thresh: float = None, 
-                        dor_thresh: float = None, radii: dict = None, ann_file: str = None, ann_format: str = None, 
-                        box_dims: dict = None, vis_prob: float = -1.0, vis_density: int = math.inf, patch_quality: int = 95, 
-                        save_pre_output: bool = False, rm_tiles: bool = True, save_patch_data: bool = False, verbose: bool = False) -> None:
+def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: str, img_files_ext: str, patch_dims: dict, 
+                        patch_overlap: float, output_dir: str, iou_thresh: float = None, dor_thresh: float = None, radii: dict = None, 
+                        ann_file: str = None, ann_format: str = None, box_dims: dict = None, vis_prob: float = -1.0, vis_density: int = math.inf, 
+                        patch_quality: int = 95, save_pre_output: bool = False, rm_tiles: bool = True, save_patch_data: bool = False, 
+                        verbose: bool = False) -> None:
     """
     Perform tiled inference on a directory of images. If ground truth annotations are available. A confusion matrix is produced 
     for each image.
@@ -216,11 +216,9 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
         class_ids (list):           list of integer class IDs in the data the model was trained on.
         imgs_dir (str):             path to the folder containing the images inference needs to be performed on.
         img_files_ext (str):        Extension of image files. E.g., 'JPG'.
-        tiling_dir (str):           path to the folder where tiles can be stored temporarily.
         patch_dims (dict):          dictionary with keys 'width' & 'height' specifying the tile dimensions. 
         patch_overlap (float):      amount of overlap (fraction) between tiles. 
-        vis_dir (str):              path to the folder where plots of images containing predictions can be stored.
-        det_dir (str):              path to the folder where inference outputs can be stored (.json).
+        output_dir (str):           path to the directory the output will be stored in. 
         iou_thresh (float):         IoU threshold to use during NMS when stitching tiles together. 
         dor_thresh (float):         DoR threshold to use during NMS when stitching tiles together. 
         radii (dict):               dictionary containing the radius values for localization NMS.
@@ -247,6 +245,18 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
 
     assert patch_overlap < 1 and patch_overlap >= 0, \
         'Illegal tile overlap value {}'.format(patch_overlap)
+    
+    # make directory for storing tiles
+    tiling_dir = f"{imgs_dir}/tiles"
+    Path(tiling_dir).mkdir()
+
+    # make output folders
+    det_dir = f"{output_dir}/detections"
+    Path(det_dir).mkdir(exist_ok=True)
+
+    if vis_prob > 0 or vis_density < math.inf: 
+        vis_dir = f"{output_dir}/vis"
+        Path(vis_dir)
     
     model = YOLO(model_file)
    
