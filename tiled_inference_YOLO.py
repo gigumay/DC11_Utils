@@ -40,6 +40,8 @@ def load_img_gt(annotations: dict,  ann_format: str, task: str, device=torch.dev
     Returns:
         tuple[torch.Tensor, torch.Tensor]:  the ground truth coordinates and classes
     """
+
+    raise NotImplementedError("Need option for point gt")
     coords_list = []
     cls_list = []
 
