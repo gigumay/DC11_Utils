@@ -10,7 +10,8 @@ import shutil
 from pathlib import Path
 from tqdm import tqdm
 from pathlib import Path
-from ann_formats import *
+from globs import *
+from processing_utils import *
 
 import visualization_utils as visutils
 
@@ -19,7 +20,6 @@ def get_boxes_in_patch_img_lvl(annotations_in_img: list, ann_format: str, patch_
     """
     For a given patch, create a list of dictionaries that for each annotation in the patch contain the
     bounding box center coordinates (at image level), the bounding box dimensions and the class of the annotation.
-    Annotations are expected to be in the COCO-format ([xmin, ymin, width, height]).
     Arguments: 
         annotations_in_img (list):  list containing dictionaries of annotations (bounding boxes)
                                     in the image the patch was taken from.
@@ -33,10 +33,18 @@ def get_boxes_in_patch_img_lvl(annotations_in_img: list, ann_format: str, patch_
         and the corresponding class. 
     """
     patch_boxes = []
+    bbox_key = DATA_ANN_FORMATS[ann_format]["label_key"]
+    category_key = DATA_ANN_FORMATS[ann_format]["category_key"]
+    xmin_idx = DATA_ANN_FORMATS[ann_format]["x_min_idx"]
+    ymin_idx = DATA_ANN_FORMATS[ann_format]["y_min_idx"]
+    width_idx = DATA_ANN_FORMATS[ann_format]["width"]
+    height_idx = DATA_ANN_FORMATS[ann_format]["height"]
+
+
     for ann in annotations_in_img:                
         # In the input annotations, boxes are expected as x/y/w/h
-        box_x_center = ann['bbox'][BBOX_FORMATS[ann_format]["x_min_idx"]] + (ann['bbox'][BBOX_FORMATS[ann_format]["width_idx"]]/2.0)
-        box_y_center = ann['bbox'][BBOX_FORMATS[ann_format]["y_min_idx"]] + (ann['bbox'][BBOX_FORMATS[ann_format]["height_idx"]]/2.0)
+        box_x_center = ann[bbox_key][xmin_idx] + (ann[bbox_key][width_idx]/2.0)
+        box_y_center = ann[bbox_key][ymin_idx] + (ann[bbox_key][height_idx]/2.0)
 
         box_dims_checked = {}
 
@@ -44,8 +52,8 @@ def get_boxes_in_patch_img_lvl(annotations_in_img: list, ann_format: str, patch_
             box_dims_checked["width"] = box_dims["width"]
             box_dims_checked["height"] = box_dims["height"]
         else: 
-            box_dims_checked["width"] = ann['bbox'][BBOX_FORMATS[ann_format]["width_idx"]]
-            box_dims_checked["height"] = ann['bbox'][BBOX_FORMATS[ann_format]["height_idx"]]
+            box_dims_checked["width"] = ann[bbox_key][width_idx]
+            box_dims_checked["height"] = ann[bbox_key][height_idx]
         
         box_x_min = box_x_center - (box_dims_checked["width"]/2.0)
         box_x_max = box_x_center + (box_dims_checked["width"]/2.0)
@@ -57,14 +65,44 @@ def get_boxes_in_patch_img_lvl(annotations_in_img: list, ann_format: str, patch_
         
         if patch_contains_box:
             patch_boxes.append({"x_center": box_x_center, "y_center": box_y_center, "box_dims": box_dims_checked,
-                                "category_id": ann['category_id']})
+                                "category_id": ann[category_key]})
     
     return patch_boxes
 
+def get_points_in_patch_img_lvl(annotations_in_img: list, ann_format: str, patch_coords: dict) -> list:
+    """
+    For a given patch, create a list of dictionaries that for each annotation in the patch contain the
+    point label coordinates (at image level) and the corresponding class.
+    Arguments: 
+        annotations_in_img (list):  list containing dictionaries of annotations (points) in the image the patch was taken from.
+        ann_format (str):           format of the annotations. 
+        patch_coords (dict):        dictionary specifying the coordinates (in pixel) of the patch in question
+    Returns: 
+        A list containing dictionaries with the coordinates (in pixel) of point, and the corresponding class. 
+    """
+    patch_pts = []
+    pt_key = DATA_ANN_FORMATS[ann_format]["label_key"]
+    category_key = DATA_ANN_FORMATS[ann_format]["category_key"]
+    x_idx = DATA_ANN_FORMATS[ann_format]["x_idx"]
+    y_idx = DATA_ANN_FORMATS[ann_format]["y_idx"]
+
+    for ann in annotations_in_img:                
+        # In the input annotations, boxes are expected as x/y/w/h
+        x = ann[pt_key][x_idx]
+        y = ann[pt_key][y_idx]
+
+        patch_contains_pt = patch_coords["x_min"] < x and x < patch_coords["x_max"] \
+                            and patch_coords["y_min"] < y and y < patch_coords["y_max"]
+        
+        if patch_contains_pt:
+            patch_pts.append({"x_center": x, "y_center": y, "category_id": ann[category_key]})
+    
+    return patch_pts
 
 
-def get_boxes_at_patch_lvl(annotations_in_img: list, patch_dims: dict, patch_coords: dict, categories: list, 
-                           max_overhang: float, box_dims: dict = None) -> tuple[list, dict, int]:
+
+def get_boxes_at_patch_lvl(annotations_in_img: list, ann_format: str, patch_dims: dict, patch_coords: dict, 
+                           categories: list, max_overhang: float, box_dims: dict = None) -> tuple[list, dict, int]:
     """
     For a given patch, create a list of the bounding boxes (as yolo-formatted dictionaries and with 
     patch-level coordinates) that lie within that patch. Boxes that span multiple patches will either be 
@@ -72,6 +110,7 @@ def get_boxes_at_patch_lvl(annotations_in_img: list, patch_dims: dict, patch_coo
     Arguments: 
         annotations_in_img (list):  list containing dictionaries of annotations (bounding boxes)
                                     in the image the patch was taken from.
+        ann_format (str):           format of the annotations.
         patch_dims (dict):          dict specifying the dimensions of the patch.
         patch_coords (dict):        dict specifying the coordinates (in pixel) of the patch
         categories (list):          list of classes in the datset
@@ -89,7 +128,7 @@ def get_boxes_at_patch_lvl(annotations_in_img: list, patch_dims: dict, patch_coo
     """
 
     class_distr_patch = {cat: 0 for cat in categories}
-    patch_boxes = get_boxes_in_patch_img_lvl(annotations_in_img=annotations_in_img, 
+    patch_boxes = get_boxes_in_patch_img_lvl(annotations_in_img=annotations_in_img, ann_format=ann_format,
                                              patch_coords=patch_coords, box_dims=box_dims)
     
     if not patch_boxes:
@@ -179,13 +218,14 @@ def get_boxes_at_patch_lvl(annotations_in_img: list, patch_dims: dict, patch_coo
 
 
 
-def get_points_in_patch(annotations_in_img: list, is_bxs: bool, patch_dims: dict, patch_coords: dict, categories: list,
-                        box_dims: dict = None) -> tuple[list, dict]:
+def get_points_at_patch_lvl(annotations_in_img: list, ann_format: str, is_bxs: bool, patch_dims: dict, patch_coords: dict, categories: list,
+                            box_dims: dict = None) -> tuple[list, dict]:
     """
     For a given patch, create a list of point labels (as yolo-formatted dictionaries) that lie within that patch
     Arguments: 
         annotations_in_img (list):  list containing dictionaries of annotations (point labels) in the image the patch
                                     was taken from.
+        ann_format (str):           format of the annotations.
         is_bxs (bool):              indicates whether the annotations come in the form of boxes or points
         patch_dims (dict):          dict specifying the dimensions of the patch.
         patch_coords (dict):        dict specifying the coordinates (in pixel) of the patch
@@ -203,10 +243,10 @@ def get_points_in_patch(annotations_in_img: list, is_bxs: bool, patch_dims: dict
     assert (1 + patch_coords["y_max"] - patch_coords["y_min"]) == patch_dims["height"]
 
     if is_bxs: 
-        ann_list = get_boxes_in_patch_img_lvl(annotations_in_img=annotations_in_img, patch_coords=patch_coords,
+        ann_list = get_boxes_in_patch_img_lvl(annotations_in_img=annotations_in_img, ann_format=ann_format, patch_coords=patch_coords,
                                               box_dims=box_dims)
     else:
-        raise(NotImplementedError, "Loading point labels has not been implemented yet!")
+        ann_list = get_points_in_patch_img_lvl(annotations_in_img=annotations_in_img, ann_format=ann_format, patch_coords=patch_coords)
     
     for ann in ann_list: 
         gt_x_img = ann["x_center"]
@@ -231,13 +271,14 @@ def get_points_in_patch(annotations_in_img: list, is_bxs: bool, patch_dims: dict
 
 
 
-def get_annotations_in_patch(annotations_in_img: list, boxes_in: bool, boxes_out: bool, patch_dims: dict, 
-                             patch_coords: dict, categories: list, box_dims: dict)-> tuple[list, dict, int]:
+def get_annotations_in_patch(annotations_in_img: list, ann_format: str, boxes_in: bool, boxes_out: bool, patch_dims: dict, patch_coords: dict, 
+                             categories: list, box_dims: dict, max_box_overhang: float = 0.85)-> tuple[list, dict, int]:
     """
     Retrieves the annotations in a given patch. 
     Arguments: 
         annotations_in_img (list):  list containing dictionaries of annotations (bounding boxes) in the image 
                                     the patch was taken from.
+        ann_format (str):           format of the annotations. 
         boxes_in (bbol):            must be set to true if the input annotations contain bounding boxes
         boxes_out (bool):           if false, return point labels instead of bounding boxes. Must be set to false
                                     when working iwht point labels. 
@@ -246,40 +287,43 @@ def get_annotations_in_patch(annotations_in_img: list, boxes_in: bool, boxes_out
         categories (list):          list of classes in the datset
         box_dims (dict):            dictionary specifying the dimensions of bounding boxes. If None, 
                                     the box dimensions will be extracted from the annotations.
+        max_box_overhang (float):   maximum percentage of a bounding box that can lie outside of a patch without causing 
+                                    the box to be excluded.
     Returns:
         1. list containing the annotations within the patch (points or boxes)
         2. dictionary containing the distribution of classes in the patch 
         3. the number of boxes that had to be clipped        
     """
 
-    # sanity check
-
     assert not (not boxes_in and boxes_out)
     if boxes_in: 
         yolo_boxes, class_distr, n_clipped_boxes = get_boxes_at_patch_lvl(annotations_in_img=annotations_in_img,
-                                                                          patch_dims=patch_dims,patch_coords=patch_coords, 
+                                                                          ann_format=ann_format,
+                                                                          patch_dims=patch_dims, 
+                                                                          patch_coords=patch_coords, 
                                                                           categories=categories,
-                                                                          max_overhang=MAX_OVERHANG_BXS,box_dims=box_dims)
+                                                                          max_overhang=max_box_overhang,
+                                                                          box_dims=box_dims)
         if boxes_out:
             return yolo_boxes, class_distr, n_clipped_boxes
         else:
-            gt_points, class_distr = get_points_in_patch(annotations_in_img=annotations_in_img, is_bxs=True, 
-                                                         patch_dims=patch_dims, patch_coords=patch_coords,
-                                                         categories=categories, box_dims=box_dims)
+            gt_points, class_distr = get_points_at_patch_lvl(annotations_in_img=annotations_in_img, 
+                                                             ann_format=ann_format, is_bxs=True, 
+                                                             patch_dims=patch_dims, patch_coords=patch_coords,
+                                                             categories=categories, box_dims=box_dims)
             return gt_points, class_distr, 0       
     else: 
-         gt_points, class_distr = get_points_in_patch(annotations_in_img=annotations_in_img, is_bxs=False,
-                                                      patch_dims=patch_dims, patch_coords=patch_coords, 
-                                                      categories=categories)
+         gt_points, class_distr = get_points_at_patch_lvl(annotations_in_img=annotations_in_img, 
+                                                          ann_format=ann_format, is_bxs=False,
+                                                          patch_dims=patch_dims, patch_coords=patch_coords, 
+                                                          categories=categories)
          return gt_points, class_distr, 0
         
     
 
-
-def process_image(source_dir_img: str, img: dict, img_width: int, img_height: int, boxes_in: bool, boxes_out: bool, 
-                  img_id_to_ann: dict, patch_dims: dict, patch_start_positions: list, n_empties: int, 
-                  patch_jpeg_quality: int, categories: list, visualize: bool, files_output_dir: str, 
-                  box_dims: dict = None, radii: dict = None, vis_output_dir: str = None) -> dict:
+def process_image(source_dir_img: str, img: dict, boxes_in: bool, boxes_out: bool, img_id_to_ann: dict, data_ann_format: str, model_ann_format: str, 
+                  patch_dims: dict, patch_overlap: float, patch_jpeg_quality: int, categories: list, visualize: bool, files_output_dir: str, 
+                  box_dims: dict = None, n_empties: int = math.inf, radii: dict = None, vis_output_dir: str = None) -> dict:
     """
     Process a given image. Processing consists of dividing the image into patches and assigning each 
     patch a set of annotations (boxes or points) that lie within that patch. If the corresponding parameters are
@@ -289,16 +333,15 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
     Arguments: 
         source_dir_img (str):           path to the directory where the image is stored
         img (dict):                     dictionary containing the image metadata
-        img_width (int):                width of the image
-        img_height (int):               height of the image
         boxes_in (bbol):                must be set to true if the input annotations contain bounding boxes
         boxes_out (bool):               if false, return point labels instead of bounding boxes. Must be set to false
                                         when working iwht point labels. 
         img_id_to_ann (dict):           a dictionary mapping image ids to lists of annotations contained
                                         in the respective images. bounding boxes are expected in the COCO-format.
+        data_ann_format (str):          format of the annotations in the data
+        model_ann_fomrat (str):         annotation format expected by the downstream model.
         patch_dims (dict):              dict specifying the dimensions of the patches.
-        patch_start_positions (list):   list of pixel coordinates specifying the starting positions of the 
-                                        patches
+        patch_overlap (float):          overlap between patches.
         n_empties (int):                the number of empty patches to sample
         patch_jpeg_quality (int):       quality of the patch-images
         categories:                     list of classes in the datset
@@ -323,8 +366,6 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
 
     img_filename = Path(source_dir_img) / img["file_name"]
     pil_img = visutils.open_image(img_filename)
-    assert pil_img.size[0] == img_width
-    assert pil_img.size[1] == img_height
 
     if radii: 
         # make sure there is a radius for every class
@@ -338,6 +379,8 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
     n_boxes_clipped_img = 0
     class_distr_img = {cat: 0 for cat in categories}
     empty_remaining = n_empties
+
+    patch_start_positions = get_patch_start_positions(img_width=pil_img.size[0], img_height=pil_img.size[1], patch_dims=patch_dims, overlap=patch_overlap)
  
 
     for patch in patch_start_positions:
@@ -348,6 +391,7 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
         
 
         gt, patch_distr, n_boxes_clipped = get_annotations_in_patch(annotations_in_img=annotations, 
+                                                                    ann_format=data_ann_format,
                                                                     boxes_in=boxes_in, 
                                                                     boxes_out=boxes_out, 
                                                                     patch_dims=patch_dims, 
@@ -426,24 +470,30 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
         with open(patch_ann_file, 'w') as f:
             for ann in gt:
                 if boxes_out:
-                    ann_str = f"{ann[YOLO_BOX_CAT_IDX]} {ann[YOLO_BOX_XCENTER_IDX]} " \
-                              f"{ann[YOLO_BOX_YCENTER_IDX]} {ann[YOLO_BOX_WIDTH_IDX]} " \
-                              f"{ann[YOLO_BOX_HEIGHT_IDX]}\n"
+                    ann_str = f"{ann[MODEL_ANN_FORMATS[model_ann_format]['category_idx']]} " \
+                              f"{ann[MODEL_ANN_FORMATS[model_ann_format]['center_x_idx']]} " \
+                              f"{ann[MODEL_ANN_FORMATS[model_ann_format]['center_y_idx']]} " \
+                              f"{ann[MODEL_ANN_FORMATS[model_ann_format]['width_idx']]} " \
+                              f"{ann[MODEL_ANN_FORMATS[model_ann_format]['height_idx']]}\n"
                 else:
-                    ann_str = f"{ann[YOLO_PT_CAT_IDX]} {radii[ann[YOLO_PT_CAT_IDX]]} {ann[YOLO_PT_X_IDX]} {ann[YOLO_PT_Y_IDX]}\n"
+                    ann_str = f"{ann[MODEL_ANN_FORMATS[model_ann_format]['category_idx']]} " \
+                              f"{radii[MODEL_ANN_FORMATS[model_ann_format]['category_idx']]} " \
+                              f"{ann[MODEL_ANN_FORMATS[model_ann_format]['x_idx']]} " \
+                              f"{ann[MODEL_ANN_FORMATS[model_ann_format]['y_idx']]}\n"
                 
                 f.write(ann_str)
                 
         assert Path.exists(patch_ann_file)
-    
-    if visualize:
-        assert vis_output_dir, "Please provide a path to a directory where visulaizations can be stored!"
-        vis_processed_img(img=img, source_dir_img=source_dir_img, img_id_to_ann=img_id_to_ann, 
-                          patch_metadata_mapping_img=pos_patch_metadata_mapping_img,
-                          patch_dims=patch_dims, boxes_out=boxes_out, output_dir=vis_output_dir)
+
+        if visualize:
+            vis_processed_img(img=img, source_dir_img=source_dir_img, img_id_to_ann=img_id_to_ann, 
+                            data_ann_format=data_ann_format, model_ann_format=model_ann_format, 
+                            patch_metadata_mapping_img=pos_patch_metadata_mapping_img, patch_dims=patch_dims, 
+                            boxes_in=boxes_in, boxes_out=boxes_out, output_dir=vis_output_dir)
 
     return {"pos_patches_mapping": pos_patch_metadata_mapping_img, 
             "neg_patches_mapping": neg_patch_metadata_mapping_img,
+            "n_total_patches": len(patch_start_positions),
             "n_non_empty_patches":len(pos_patch_metadata_mapping_img.keys()),
             "n_empty_patches": len(neg_patch_metadata_mapping_img),
             "n_annotations": n_annotations_img, 
@@ -452,8 +502,9 @@ def process_image(source_dir_img: str, img: dict, img_width: int, img_height: in
 
 
 
-def vis_processed_img(img: dict, source_dir_img: str, img_id_to_ann: dict, patch_metadata_mapping_img: dict, patch_dims: dict, boxes_out: bool, 
-                      output_dir: str) -> None:
+def vis_processed_img(img: dict, source_dir_img: str, img_id_to_ann: dict, data_ann_format: str, model_ann_format: str, 
+                      patch_metadata_mapping_img: dict, patch_dims: dict, boxes_in: bool, boxes_out: bool, output_dir: str, 
+                      circle_radius: int = 3) -> None:
     """
     Draws annotations into the provided image and the corresponding patches. Image and patches are then stored in the specified 
     directory.
@@ -462,12 +513,14 @@ def vis_processed_img(img: dict, source_dir_img: str, img_id_to_ann: dict, patch
         source_dir_img (str):               path to the directoryt where the image is stored
         img_id_to_ann (dict):               a dictionary mapping image ids to lists of annotations contained
                                             in the respective images. Bounding boxes are expected in the COCO-format.
+        ann_format (str):                   format of the annotations. 
         patch_metadata_mapping_img (dict):  dictionary containing the metadata for all patches of the image in question
         patch_dims (dict):                  dictionary containing the dimensions of patches
+        boxes_in (bbol):                    must be set to true if the input annotations contain bounding boxes
         boxes_out (bool):                   if false, the annotations are expected to contain point labels instead of bounding
                                             boxes
-        output_dir (str):                   directory where the output files will be stroed
-
+        output_dir (str):                   directory where the output files will be stored
+        circle_radius (int):                raidus of the circles drawn for point label visualization.
     Returns:
         None
     """
@@ -478,21 +531,26 @@ def vis_processed_img(img: dict, source_dir_img: str, img_id_to_ann: dict, patch
     img_arr = cv2.imread(f"{source_dir_img}/{img['file_name']}")
 
     for ann in img_id_to_ann[img["id"]]:
+        label = ann[DATA_ANN_FORMATS[data_ann_format]["label_key"]]
         
         if boxes_out:
             #cv2 needs int coordinates
-            xmin_img = round(ann["bbox"][COCO_BOX_XMIN_IDX])
-            xmax_img = round(ann["bbox"][COCO_BOX_XMIN_IDX] + ann["bbox"][COCO_BOX_WIDTH_IDX])
-            ymin_img = round(ann["bbox"][COCO_BOX_YMIN_IDX])
-            ymax_img = round(ann["bbox"][COCO_BOX_YMIN_IDX] + ann["bbox"][COCO_BOX_HEIGHT_IDX])
+            xmin_img = round(label[DATA_ANN_FORMATS[data_ann_format]["x_min_idx"]])
+            xmax_img = round(label[DATA_ANN_FORMATS[data_ann_format]["x_min_idx"]] + label[DATA_ANN_FORMATS[data_ann_format]["width_idx"]])
+            ymin_img = round(label[DATA_ANN_FORMATS[data_ann_format]["y_min_idx"]])
+            ymax_img = round(label[DATA_ANN_FORMATS[data_ann_format]["y_min_idx"]] + label[DATA_ANN_FORMATS[data_ann_format]["height_idx"]])
          
             cv2.rectangle(img=img_arr, pt1=(xmin_img, ymin_img), pt2=(xmax_img, ymax_img), 
                           color=(0, 0, 255), thickness=1)
         else:
-            x_center = round(ann["bbox"][COCO_BOX_XMIN_IDX] + ann["bbox"][COCO_BOX_WIDTH_IDX] / 2)
-            y_center = round(ann["bbox"][COCO_BOX_YMIN_IDX] + ann["bbox"][COCO_BOX_HEIGHT_IDX] / 2)
+            if boxes_in:
+                x_center = round(label[DATA_ANN_FORMATS[data_ann_format]["x_min_idx"]] +label[DATA_ANN_FORMATS[data_ann_format]["width_idx"]] / 2.0)
+                y_center = round(label[DATA_ANN_FORMATS[data_ann_format]["y_min_idx"]] + label[DATA_ANN_FORMATS[data_ann_format]["height_idx"]] / 2.0)
+            else:
+                x_center = label[DATA_ANN_FORMATS[data_ann_format]["x_idx"]]
+                y_center = label[DATA_ANN_FORMATS[data_ann_format]["y_idx"]]
             
-            cv2.circle(img=img_arr, center=(x_center, y_center), radius=PT_VIS_CIRCLE_RADIUS, 
+            cv2.circle(img=img_arr, center=(x_center, y_center), radius=circle_radius, 
                        color=(0, 0, 255), thickness=-1)
 
     cv2.imwrite(str(output_path/f"full_img_{img['id']}.jpg"), img_arr)
@@ -507,25 +565,30 @@ def vis_processed_img(img: dict, source_dir_img: str, img_id_to_ann: dict, patch
         else:
             gt = patch_dict["points"]
 
+
         for ann in gt:
             if boxes_out:
-                #convert relative (yolo-formatted) box data to absolute values for plotting
-                x_center_absolute_patch = ann[YOLO_BOX_XCENTER_IDX] * patch_dims["width"]
-                y_center_absolute_patch = ann[YOLO_BOX_YCENTER_IDX] * patch_dims["height"]
-                width_absolute = ann[YOLO_BOX_WIDTH_IDX] * patch_dims["width"]
-                height_absolute = ann[YOLO_BOX_HEIGHT_IDX] * patch_dims["height"]
+                # convert relative (yolo-formatted) box data to absolute values for plotting
+                x_center_absolute_patch = ann[MODEL_ANN_FORMATS[model_ann_format]["center_x_idx"]] * patch_dims["width"]
+                y_center_absolute_patch = ann[MODEL_ANN_FORMATS[model_ann_format]["center_y_idx"]] * patch_dims["height"]
+                width_absolute = ann[MODEL_ANN_FORMATS[model_ann_format]["width_idx"]] * patch_dims["width"]
+                height_absolute = ann[MODEL_ANN_FORMATS[model_ann_format]["height_idx"]] * patch_dims["height"]
 
-                xmin_patch = round(x_center_absolute_patch - (width_absolute / 2))
-                xmax_patch = round(x_center_absolute_patch + (width_absolute / 2))
-                ymin_patch = round(y_center_absolute_patch - (height_absolute / 2))
-                ymax_patch = round(y_center_absolute_patch + (height_absolute / 2))
+                xmin_patch = round(x_center_absolute_patch - (width_absolute / 2.0))
+                xmax_patch = round(x_center_absolute_patch + (width_absolute / 2.0))
+                ymin_patch = round(y_center_absolute_patch - (height_absolute / 2.0))
+                ymax_patch = round(y_center_absolute_patch + (height_absolute / 2.0))
 
                 cv2.rectangle(img=patch_arr, pt1=(xmin_patch, ymin_patch), pt2=(xmax_patch, ymax_patch), 
                               color=(0, 255, 0), thickness=1)
             else:
-                #convert relative coords to pixel for plotting
-                x_patch = round(ann[YOLO_PT_X_IDX] * patch_dims["width"])
-                y_patch = round(ann[YOLO_PT_Y_IDX] * patch_dims["height"])
+                # convert relative coords to pixel for plotting
+                if boxes_in:
+                    x_patch = round(ann[MODEL_ANN_FORMATS[model_ann_format]["center_x_idx"]] * patch_dims["width"])
+                    y_patch = round(ann[MODEL_ANN_FORMATS[model_ann_format]["center_y_idx"]] * patch_dims["height"])
+                else:
+                    x_patch = round(ann[MODEL_ANN_FORMATS[model_ann_format]["x_idx"]] * patch_dims["width"])
+                    y_patch = round(ann[MODEL_ANN_FORMATS[model_ann_format]["y_idx"]] * patch_dims["height"])
 
                 if x_patch == patch_dims["width"]:
                     x_patch -= 1
@@ -533,13 +596,13 @@ def vis_processed_img(img: dict, source_dir_img: str, img_id_to_ann: dict, patch
                     y_patch -= 1
 
                 #check if circle fits into patch
-                draw_circle = x_patch + PT_VIS_CIRCLE_RADIUS < patch_dims["width"] and \
-                              x_patch - PT_VIS_CIRCLE_RADIUS > 0 and \
-                              y_patch + PT_VIS_CIRCLE_RADIUS < patch_dims["height"] and \
-                              y_patch - PT_VIS_CIRCLE_RADIUS > 0
+                draw_circle = x_patch + circle_radius < patch_dims["width"] and \
+                              x_patch - circle_radius > 0 and \
+                              y_patch + circle_radius < patch_dims["height"] and \
+                              y_patch - circle_radius > 0
 
                 if draw_circle: 
-                    cv2.circle(img=patch_arr, center=(x_patch, y_patch), radius=PT_VIS_CIRCLE_RADIUS, 
+                    cv2.circle(img=patch_arr, center=(x_patch, y_patch), radius=circle_radius, 
                                color=(0, 255, 0), thickness=-1)
                 else:
                     patch_arr[y_patch, x_patch] = (0, 255, 0)

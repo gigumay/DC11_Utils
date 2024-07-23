@@ -19,19 +19,12 @@ from pathlib import Path
 
 from ultralytics import YOLO
 from ops import loc_nms, generate_radii_t
-from metrics import box_iou, bbox_iou, loc_dor, ConfusionMatrix
+from metrics import ConfusionMatrix
 
 from processing_utils import *
-from ann_formats import *
+from globs import *
 
 PT_VIS_RADIUS = 3
-
-# BGR colors
-CLASS_COLORS = {0: (134, 22, 171),      # purple
-                1: (0, 255, 255),       # yellow
-                2: (204, 232, 19),      # turquoise
-                3: (0, 97, 242),        # orange
-                4: (0, 255, 0)}         # green
 
 
 
@@ -51,19 +44,26 @@ def load_img_gt(annotations: dict,  ann_format: str, task: str, device=torch.dev
     cls_list = []
 
     for ann in annotations:
-        xmin = ann["bbox"][BBOX_FORMATS[ann_format]["x_min_idx"]]
-        ymin = ann["bbox"][BBOX_FORMATS[ann_format]["y_min_idx"]]
+        label = ann[DATA_ANN_FORMATS[ann_format]["label_key"]]
+        x_center = label[DATA_ANN_FORMATS[ann_format]["x_min_idx"]] + (label[DATA_ANN_FORMATS[ann_format]["width_idx"]] / 2.0)
+        y_center = label[DATA_ANN_FORMATS[ann_format]["y_min_idx"]] + (label[DATA_ANN_FORMATS[ann_format]["height_idx"]] / 2.0)
 
-        width = box_dims["width"] if box_dims else ann["bbox"][BBOX_FORMATS[ann_format]["width"]]
-        height = box_dims["height"] if box_dims else ann["bbox"][BBOX_FORMATS[ann_format]["height"]]
+        box_dims_checked = {}
+
+        if box_dims:
+            box_dims_checked["width"] = box_dims["width"]
+            box_dims_checked["height"] = box_dims["height"]
+        else: 
+            box_dims_checked["width"] = label[DATA_ANN_FORMATS[ann_format]["width_idx"]]
+            box_dims_checked["height"] = label[DATA_ANN_FORMATS[ann_format]["height_idx"]]
 
         if task == "detect":
-            xmax = xmin + width
-            ymax = ymin + height
+            xmin = x_center - (box_dims_checked["width"]/2.0)
+            xmax = x_center + (box_dims_checked["width"]/2.0)
+            ymin = y_center - (box_dims_checked["height"]/2.0)
+            ymax = y_center + (box_dims_checked["height"]/2.0)
             coords_list.append([xmin, ymin, xmax, ymax])
         else:
-            x_center = xmin + (width / 2.0)
-            y_center = ymin + (height / 2.0)
             coords_list.append([x_center, y_center])
     
         cls_list.append(ann["category_id"])
@@ -79,14 +79,16 @@ def load_img_gt(annotations: dict,  ann_format: str, task: str, device=torch.dev
     return coords_t, cls_t 
 
 
-def collect_boxes(predictions: list, patches: list, device: torch.device, patch_output_dir: tuple[str, None]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def collect_boxes(predictions: list, class_ids: list, patches: list, device: torch.device, patch_output_dir: tuple[str, None]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Collect all patch-level boxes from a list of predictions and map them to the image space.
+    Collect all patch-level boxes from a list of predictions and map them to the image space. If an output directory 
+    is specified, patch level counts will be writtento a .json file in that directory. 
     Arguments:
         predictions (list):         list containing all patch predictions.
+        class_ids (list):           list of class ids. 
         patches (list):             list containing all patches.
         device (torch.device):      device used for inference.
-        patch_output_dir (str):     path to the folder where patch-level predictions can be stored. 
+        patch_output_dir (str):     path to the folder where patch-level counts can be stored. 
     Returns:
         tuple[torch.Tensor, torch.Tensor, torch.Tensor]: the coordinates, confidence scores and classes of the image level predictions
 
@@ -104,8 +106,15 @@ def collect_boxes(predictions: list, patches: list, device: torch.device, patch_
 
         # write patch level predictions to file
         if patch_output_dir:
-            patch_coords_str = f"xmin{patches[i]['coords']['x_min']}_ymin{patches[i]['coords']['y_min']}"
-            np.savetxt(fname=f"{patch_output_dir}/{patch_coords_str}", X=data_merged.cpu().numpy())
+            patch_count = {cls_id: 0 for cls_id in class_ids}
+            pred_counts = torch.bincount(data.cls)
+
+            for i in range(pred_counts.size(dim=0)):
+                patch_count[i] = pred_counts[i]
+
+            patch_coords_str = f"{patches[i]['coords']['x_min']}_{patches[i]['coords']['y_min']}"
+            with open(f"{patch_output_dir}/{patch_coords_str}.json", "w") as f:
+                json.dump(patch_count, f)
 
         # map prediction to image_level
         data_merged[:, [0, 2]] = data_merged[:, [0,2]] + patches[i]["coords"]["x_min"]
@@ -117,14 +126,16 @@ def collect_boxes(predictions: list, patches: list, device: torch.device, patch_
     return all_preds.split((4, 1, 1), 1)
 
 
-def collect_locations(predictions: list, patches: list, device: torch.device, patch_output_dir: tuple[str, None]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def collect_locations(predictions: list, class_ids: list, patches: list, device: torch.device, patch_output_dir: tuple[str, None]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Collect all patch-level locations from a list of predictions and map them to the image space.
+    Collect all patch-level locations from a list of predictions and map them to the image space. If an output directory 
+    is specified, patch level counts will be writtento a .json file in that directory. 
     Arguments:
         predictions (list):         list containing all patch predictions.
+        class_ids (list):           list of class ids. 
         patches (list):             list containing all patches.
         device (torch.device):      device used for inference.
-        patch_output_dir (str):     path to the folder where patch-level predictions can be stored. 
+        patch_output_dir (str):     path to the folder where patch-level counts can be stored. 
     Returns:
         tuple[torch.Tensor, torch.Tensor, torch.Tensor]: the coordinates, confidence scores and classes of the image level predictions
 
@@ -142,8 +153,15 @@ def collect_locations(predictions: list, patches: list, device: torch.device, pa
 
         # write patch level predictions to file
         if patch_output_dir:
-            patch_coords_str = f"xmin{patches[i]['coords']['x_min']}_ymin{patches[i]['coords']['y_min']}"
-            np.savetxt(fname=f"{patch_output_dir}/{patch_coords_str}", X=data_merged.cpu().numpy())
+            patch_count = {cls_id: 0 for cls_id in class_ids}
+            pred_counts = torch.bincount(data.cls.int())
+
+            for i in range(pred_counts.size(dim=0)):
+                patch_count[i] = pred_counts[i].item()
+
+            patch_coords_str = f"{patches[i]['coords']['x_min']}_{patches[i]['coords']['y_min']}"
+            with open(f"{patch_output_dir}/{patch_coords_str}.json", "w") as f:
+                json.dump(patch_count, f)
 
         # map prediction to image_level
         data_merged[:, 0] = data_merged[:, 0] + patches[i]["coords"]["x_min"]
@@ -155,7 +173,8 @@ def collect_locations(predictions: list, patches: list, device: torch.device, pa
     return all_preds.split((2, 1, 1), 1)
 
 
-def collect_predictions_wrapper(task: str, predictions: list, patches: list, device: torch.device, patch_output_dir: tuple[str, None]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def collect_predictions_wrapper(task: str, predictions: list, patches: list, device: torch.device, patch_output_dir: tuple[str, None],
+                                class_ids: list = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Wrapper for 'collect_boxes' and 'collect_locations'. 
     Arguments:
@@ -171,7 +190,7 @@ def collect_predictions_wrapper(task: str, predictions: list, patches: list, dev
     if task == "detect":
         return collect_boxes(predictions=predictions, patches=patches, device=device, patch_output_dir=patch_output_dir)
     else:
-        return collect_locations(predictions=predictions, patches=patches, device=device, patch_output_dir=patch_output_dir)
+        return collect_locations(predictions=predictions, class_ids=class_ids, patches=patches, device=device, patch_output_dir=patch_output_dir)
     
 
 def plot_annotated_img(img_fn: str, coords: torch.Tensor, cls: torch.Tensor, output_dir: str, pre_nms: bool = False,) -> None:
@@ -208,7 +227,7 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
                         patch_quality: int = 95, save_pre_output: bool = False, rm_tiles: bool = True, save_patch_data: bool = False, 
                         verbose: bool = False) -> None:
     """
-    Perform tiled inference on a directory of images. If ground truth annotations are available. A confusion matrix is produced 
+    Perform tiled inference on a directory of images. If ground truth annotations are available, a confusion matrix is produced 
     for each image.
     Arguments:
         model_file (str):           path to the model file (.pt) to be used for inference.
@@ -226,7 +245,7 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
                                     expected to containa  dictionary that maps image filenames ot annotations, such as
                                     produced by the methods in preprocessing.py (DC11 Utils)
         ann_format (string):        format of the annotations.
-        box_dims_training (dict):   dimensions of the bounding boxes used for model training. For cases where 
+        box_dims (dict):            dimensions of the bounding boxes used for model training. For cases where 
                                     dimensions that differ from what is specified in the annotations were used. 
         vis_prob (str):             plotting probability. For each image, a random number between 0 and 1 is drawn, 
                                     and if it's below vis_prob, the image in question & the corresponding predictions
@@ -246,6 +265,9 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
     assert patch_overlap < 1 and patch_overlap >= 0, \
         'Illegal tile overlap value {}'.format(patch_overlap)
     
+    if save_patch_data: 
+        raise NotImplementedError("This hasn't been implemented correctly yet!")
+    
     # make directory for storing tiles
     tiling_dir = f"{imgs_dir}/tiles"
     Path(tiling_dir).mkdir()
@@ -256,8 +278,8 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
 
     if vis_prob > 0 or vis_density < math.inf: 
         vis_dir = f"{output_dir}/vis"
-        Path(vis_dir)
-    
+        Path(vis_dir).mkdir(exist_ok=True)
+ 
     model = YOLO(model_file)
    
     # read file if annotations are provided
@@ -303,7 +325,7 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
     
         # create folder to store original patch level predictions
         if save_patch_data:
-            patch_data_dir = str(Path(det_dir).parent / "patch_data")
+            patch_data_dir = Path(det_dir).parent / "patch_data"
             patch_data_dir.mkdir(parents=False, exist_ok=True)
             patch_output_dir = f"{patch_data_dir}/{fn.stem}"
             Path(patch_output_dir).mkdir(parents=False, exist_ok=True)
@@ -313,12 +335,12 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
         # run detection on patches 
         patch_fns = [patch["patch_fn"] for patch in patches]
         if task == "detect":
-            predictions = model(patch_fns, verbose=False)
+            predictions = model(patch_fns, iou=iou_thresh, verbose=False)
         else:
-            predictions = model(patch_fns, radii=radii, verbose=False)
+            predictions = model(patch_fns, radii=radii, dor=dor_thresh, verbose=False)
         
         # collect predictions from each patch and map it back to image level
-        coords, conf, cls = collect_predictions_wrapper(task=task, predictions=predictions, patches=patches, 
+        coords, conf, cls = collect_predictions_wrapper(task=task, class_ids=class_ids, predictions=predictions, patches=patches, 
                                                         device=model.device, patch_output_dir=patch_output_dir)
         
         # get counts before nms
@@ -332,15 +354,13 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
             with open(f"{det_dir}/{fn.stem}_pre_nms.json", "w") as f:
                 json.dump(counts_pre_dict, f, indent=1)
 
-        visualize = (random.randint(0, 1000) / 1000 <= vis_prob) or (pre_nms >= vis_density) 
+        visualize = (random.randint(0, 1000) / 1000 <= vis_prob) or (pre_nms >= vis_density)
         if visualize and save_pre_output:
             plot_annotated_img(img_fn=str(fn), coords=coords, pre_nms=True, output_dir=vis_dir)
 
         # perform nms
         if task == "detect":
             idxs = torchvision.ops.nms(boxes=coords, scores=conf.squeeze(1), iou_threshold=iou_thresh)
-            #idxs_ovrlp = filter_ovrlp(coords=coords)
-            #idxs = torch.LongTensor([idx for idx in idxs_nms if idx not in idxs_ovrlp])
         else:
             radii_t = generate_radii_t(radii=radii, cls=cls.squeeze(1))
             idxs = loc_nms(preds=coords, scores=conf.squeeze(1), radii=radii_t, dor_thres=dor_thresh)
