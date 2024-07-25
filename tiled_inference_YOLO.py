@@ -3,6 +3,7 @@ sys.path.append("/home/giacomo/repos/MegaDetector/md_visualization")
 sys.path.append("/home/giacomo/projects/P0_YOLOcate/ultralytics/utils")
 
 import shutil
+import warnings
 import tqdm
 import json
 import random
@@ -29,44 +30,44 @@ PT_VIS_RADIUS = 3
 
 
 def load_img_gt(annotations: dict,  ann_format: str, task: str, device=torch.device, box_dims: dict = None) -> tuple[torch.Tensor, torch.Tensor]:
+
     """
     Expects the annotations in an image as a dictionary of dictionaries, and from that creates tensors for the ground truth labels. 
     Arguments:
         annotations (dictionary):           dictionary containing all annotations (as dictionaries) within the image under consideration.
         ann_format (string):                string indicatin the annotation format
-        task (string):                      string indicating the prediction task. Can either be 'detect' or 'locate'
+        task (string):                      string indicating the prediction task
         device (torch.device):              device on which to store the gt tensors
         box_dims (dict):                    dimensions of ground-truth bounding boxes
     Returns:
         tuple[torch.Tensor, torch.Tensor]:  the ground truth coordinates and classes
     """
-
-    raise NotImplementedError("Need option for point gt")
     coords_list = []
     cls_list = []
 
     for ann in annotations:
         label = ann[DATA_ANN_FORMATS[ann_format]["label_key"]]
-        x_center = label[DATA_ANN_FORMATS[ann_format]["x_min_idx"]] + (label[DATA_ANN_FORMATS[ann_format]["width_idx"]] / 2.0)
-        y_center = label[DATA_ANN_FORMATS[ann_format]["y_min_idx"]] + (label[DATA_ANN_FORMATS[ann_format]["height_idx"]] / 2.0)
-
-        box_dims_checked = {}
-
-        if box_dims:
-            box_dims_checked["width"] = box_dims["width"]
-            box_dims_checked["height"] = box_dims["height"]
-        else: 
-            box_dims_checked["width"] = label[DATA_ANN_FORMATS[ann_format]["width_idx"]]
-            box_dims_checked["height"] = label[DATA_ANN_FORMATS[ann_format]["height_idx"]]
 
         if task == "detect":
+            x_center = label[DATA_ANN_FORMATS[ann_format]["x_min_idx"]] + (label[DATA_ANN_FORMATS[ann_format]["width_idx"]] / 2.0)
+            y_center = label[DATA_ANN_FORMATS[ann_format]["y_min_idx"]] + (label[DATA_ANN_FORMATS[ann_format]["height_idx"]] / 2.0)
+            
+            box_dims_checked = {}
+            if box_dims:
+                box_dims_checked["width"] = box_dims["width"]
+                box_dims_checked["height"] = box_dims["height"]
+            else: 
+                box_dims_checked["width"] = label[DATA_ANN_FORMATS[ann_format]["width_idx"]]
+                box_dims_checked["height"] = label[DATA_ANN_FORMATS[ann_format]["height_idx"]]
+            
             xmin = x_center - (box_dims_checked["width"]/2.0)
             xmax = x_center + (box_dims_checked["width"]/2.0)
             ymin = y_center - (box_dims_checked["height"]/2.0)
             ymax = y_center + (box_dims_checked["height"]/2.0)
             coords_list.append([xmin, ymin, xmax, ymax])
         else:
-            coords_list.append([x_center, y_center])
+            warnings.warn("Retrieving ground truths for point annotations hasn't been tested yet!")
+            coords_list.append([label[DATA_ANN_FORMATS[ann_format]["x_idx"]], label[DATA_ANN_FORMATS[ann_format]["y_idx"]]])
     
         cls_list.append(ann["category_id"])
 
@@ -180,7 +181,7 @@ def collect_predictions_wrapper(task: str, predictions: list, patches: list, dev
     """
     Wrapper for 'collect_boxes' and 'collect_locations'. 
     Arguments:
-        task (str):                 string indicating the model task. Can be 'detect' or 'locate'.
+        task (str):                 string indicating the model task
         predictions (list):         list containing all predictions made on an image's patches.
         patches (list):             list containing all patches of an image.
         device (torch.device):      device used for inference.
@@ -258,7 +259,7 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
         patch_quality (float):      quality of tle image files (not sure what this does or why I need it tbh).
         save_pre_output (bool):     if True, outputs (plots + detections) before NMS will be sav ed as well.
         rm_tiles (bool):            whether to remove the tile image files after inference.
-        save_patch_data (bool):     if True, the predictions for each tile will bes tored as files too (.json)
+        save_patch_data (bool):     if True, the predictions for each tile will be stored as files too (.json)
         verbose (bool):             if True, the amount of predictions removed by NMS will be printed to the console.
     Returns:
         None
@@ -267,8 +268,6 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
     assert patch_overlap < 1 and patch_overlap >= 0, \
         'Illegal tile overlap value {}'.format(patch_overlap)
     
-    if save_patch_data: 
-        raise NotImplementedError("This hasn't been implemented correctly yet!")
     
     # make directory for storing tiles
     tiling_dir = f"{imgs_dir}/tiles"

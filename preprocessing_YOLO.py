@@ -5,7 +5,6 @@ import os
 import math
 import cv2
 import random 
-import json
 import shutil
 
 from pathlib import Path
@@ -637,12 +636,8 @@ def vis_processed_img(img_path, img2ann: dict, data_ann_format: str, model_ann_f
                               color=(0, 255, 0), thickness=1)
             else:
                 # convert relative coords to pixel for plotting
-                if boxes_in:
-                    x_patch = round(ann[MODEL_ANN_FORMATS[model_ann_format]["center_x_idx"]] * patch_dims["width"])
-                    y_patch = round(ann[MODEL_ANN_FORMATS[model_ann_format]["center_y_idx"]] * patch_dims["height"])
-                else:
-                    x_patch = round(ann[MODEL_ANN_FORMATS[model_ann_format]["x_idx"]] * patch_dims["width"])
-                    y_patch = round(ann[MODEL_ANN_FORMATS[model_ann_format]["y_idx"]] * patch_dims["height"])
+                x_patch = round(ann[MODEL_ANN_FORMATS[model_ann_format]["x_idx"]] * patch_dims["width"])
+                y_patch = round(ann[MODEL_ANN_FORMATS[model_ann_format]["y_idx"]] * patch_dims["height"])
 
                 if x_patch == patch_dims["width"]:
                     x_patch -= 1
@@ -713,7 +708,7 @@ def patchify_imgs(img_paths: list, img2ann: dict, classes: list, data_ann_format
             break
 
         # visualize some outputs at random
-        visualize = ((random.randint(0, 1000) / 1000)) <= vis_prob or (n_debug_imgs > 0)
+        visualize = ((random.randint(0, 1000) / 1000)) <= vis_prob
 
         output = process_image(img_path=p,
                                img2ann=img2ann, 
@@ -751,7 +746,7 @@ def patchify_imgs(img_paths: list, img2ann: dict, classes: list, data_ann_format
             overall_distr[cls_id] += output["class_distribution"][cls_id]
 
         if rm_orig_imgs:
-            Path.unlink(p)
+            Path.unlink(Path(p))
 
 
     neg_patches = [p for p in Path(output_dir).glob("*.jpg") if "empty" in str(p)]
@@ -759,7 +754,10 @@ def patchify_imgs(img_paths: list, img2ann: dict, classes: list, data_ann_format
     #sanity check
     assert len(neg_patches) == len(all_neg_patches_mapping)
 
-    n_negs = int(math.ceil(neg_frac * len(neg_patches)))
+    # get number of empty patches to sample
+    n_patches_all = int(math.ceil(len(all_pos_patches_mapping) / (1 - neg_frac)))
+    n_negs = n_patches_all - len(all_pos_patches_mapping)
+
     random.shuffle(neg_patches)
     negs2rm = neg_patches[n_negs:]
 

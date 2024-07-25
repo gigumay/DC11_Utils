@@ -118,8 +118,19 @@ def patch_info2name(image_name: str, patch_x_min: int, patch_y_min: int, is_empt
     return patch_name
 
 
-def vis_img(img_path: str, annotations: list, ann_format: str, boxes_in: bool, boxes_out: bool, output_dir: str):
-    # TODO: comment
+
+def vis_img(img_path: str, annotations: list, ann_format: str, boxes_in: bool, boxes_out: bool, output_dir: str) -> None:
+    """
+    Plot an image with its labels.
+    Arguments:
+        img_path (str):             path to the image to be plotted
+        annotations (list):         list of labels wihtin the image
+        ann_format (str):           format in which the annotations are provided
+        boxes_in (bool):            if true, annotations are expected to be box labels
+        boxes_out (bool):           if true, annotations are plotted as boxes. Requires boxes_in to be true. 
+    Returns:
+        None
+    """
     img_arr = cv2.imread(img_path)
     img_name = Path(img_path).stem
 
@@ -128,6 +139,7 @@ def vis_img(img_path: str, annotations: list, ann_format: str, boxes_in: bool, b
         cls_id = ann[DATA_ANN_FORMATS[ann_format]["category_key"]]
         
         if boxes_out:
+            assert boxes_in, "Cannot plot boxes from point labels"
             #cv2 needs int coordinates
             xmin_img = round(label[DATA_ANN_FORMATS[ann_format]["x_min_idx"]])
             xmax_img = round(label[DATA_ANN_FORMATS[ann_format]["x_min_idx"]] + label[DATA_ANN_FORMATS[ann_format]["width_idx"]])
