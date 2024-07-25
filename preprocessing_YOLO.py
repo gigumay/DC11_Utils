@@ -17,18 +17,28 @@ from processing_utils import *
 import visualization_utils as visutils
 
 
-def split_dataset(dataset_dir: str, img_format: str, val_frac: float, test_frac: float, output_dir: str = None) -> dict:
-    # TODO: comments
+def split_dataset(dataset_dir: str, img_format: str, val_frac: float, test_frac: float, rm_copies: bool = False, output_dir: str = None) -> tuple[dict, dict]:
+    """
+    Split a dataset into training-, validation, and test set. Creates a "train", "val" and "test" directory in the specified output 
+    directory, containing the corresponding images. 
+    Arguments:
+        dataset_dir (str):          path to the directory containing the dataset to be split.
+        img_format (str):           format of the image files. Will be used to select which files in the 
+                                    data directory to select for splitting.
+        val_frac (float):           fraction of the data to be used for validation.
+        test_frac (float):          fraction of the data to be used for testing.
+        rm_copies (bool):           whether to keep copies of the image files. 
+        output_dir (str):           path to the directory where the splits will be stored. 
+    Returns:
+        Two dictionaries: one containign the paths to the "train", "val" and "test" directories, and one mapping 
+        splits to image names. 
+    """
     if not output_dir:
         output_dir = dataset_dir
 
     splits = {"train": [], "val": [], "test": []}
-    
-    subdirs = [x[0] for x in os.walk(dataset_dir)]
-    if subdirs:
-        print("***Found subdirectories in the dataset folder! Files from theses subdirectories will not be considered!")
 
-    img_fns = Path(dataset_dir).glob(f"*.{img_format}")
+    img_fns = list(Path(dataset_dir).glob(f"*.{img_format}"))
    
     n_test_imgs = int(math.ceil(test_frac * len(img_fns)))
     n_val_imgs = int(math.ceil(val_frac * len(img_fns)))
@@ -47,18 +57,25 @@ def split_dataset(dataset_dir: str, img_format: str, val_frac: float, test_frac:
     Path(val_dir).mkdir()
     Path(train_dir).mkdir()
 
+    dirs = {"train": train_dir, "val": val_dir, "test": test_dir}
+
     for fn in test_fns:
-        shutil.move(fn, test_dir)
+        shutil.copy(fn, test_dir)
         splits["test"].append(f"{Path(fn).name}")
+        if rm_copies:
+            Path.unlink(fn)
     for fn in val_fns:
-        shutil.move(fn, val_dir)
+        shutil.copy(fn, val_dir)
         splits["val"].append(f"{Path(fn).name}")
+        if rm_copies:
+            Path.unlink(fn)
     for fn in train_fns:
-        shutil.move(fn, train_dir)
+        shutil.copy(fn, train_dir)
         splits["train"].append(f"{Path(fn).name}")
+        if rm_copies:
+            Path.unlink(fn)
 
-    return splits
-
+    return splits, dirs
 
 
 def get_boxes_in_patch_img_lvl(annotations_in_img: list, ann_format: str, patch_coords: dict, box_dims: dict = None) -> list:
@@ -69,8 +86,7 @@ def get_boxes_in_patch_img_lvl(annotations_in_img: list, ann_format: str, patch_
         annotations_in_img (list):  list containing dictionaries of annotations (bounding boxes)
                                     in the image the patch was taken from.
         ann_format (str):           format of the annotations. 
-        patch_coords (dict):        dictionary specifying the coordinates (in pixel) of the 
-                                    patch in question
+        patch_coords (dict):        dictionary specifying the coordinates (in pixel) of the patch in question
         box_dims (dict):            dictionary specifying the dimensions of bounding boxes. If None, 
                                     the box dimensions will be extracted from the annotations.
     Returns: 
@@ -82,12 +98,11 @@ def get_boxes_in_patch_img_lvl(annotations_in_img: list, ann_format: str, patch_
     category_key = DATA_ANN_FORMATS[ann_format]["category_key"]
     xmin_idx = DATA_ANN_FORMATS[ann_format]["x_min_idx"]
     ymin_idx = DATA_ANN_FORMATS[ann_format]["y_min_idx"]
-    width_idx = DATA_ANN_FORMATS[ann_format]["width"]
-    height_idx = DATA_ANN_FORMATS[ann_format]["height"]
+    width_idx = DATA_ANN_FORMATS[ann_format]["width_idx"]
+    height_idx = DATA_ANN_FORMATS[ann_format]["height_idx"]
 
 
     for ann in annotations_in_img:                
-        # In the input annotations, boxes are expected as x/y/w/h
         box_x_center = ann[bbox_key][xmin_idx] + (ann[bbox_key][width_idx]/2.0)
         box_y_center = ann[bbox_key][ymin_idx] + (ann[bbox_key][height_idx]/2.0)
 
@@ -132,7 +147,6 @@ def get_points_in_patch_img_lvl(annotations_in_img: list, ann_format: str, patch
     y_idx = DATA_ANN_FORMATS[ann_format]["y_idx"]
 
     for ann in annotations_in_img:                
-        # In the input annotations, boxes are expected as x/y/w/h
         x = ann[pt_key][x_idx]
         y = ann[pt_key][y_idx]
 
@@ -367,55 +381,49 @@ def get_annotations_in_patch(annotations_in_img: list, ann_format: str, boxes_in
     
 
 def process_image(img_path: str, img2ann: dict, classes: list, data_ann_format: str, model_ann_format: str, boxes_in: bool, boxes_out: bool, 
-                  patch_dims: dict, patch_overlap: float, patch_jpeg_quality: int, visualize: bool, patch_data_dir: str, box_dims: dict = None, 
-                  radii: dict = None, vis_output_dir: str = None) -> dict:
-    #TODO: comments
+                  patch_dims: dict, patch_overlap: float, patch_jpeg_quality: int,  output_dir: str, box_dims: dict = None, radii: dict = None, 
+                  visualize: bool = False, vis_output_dir: str = None) -> dict:
     """
     Process a given image. Processing consists of dividing the image into patches and assigning each 
-    patch a set of annotations (boxes or points) that lie within that patch. If the corresponding parameters are
-    set accordingly the patches are saved as image files and box-/point-metadata is written to files in yolo-format 
-    (happens always for patches that contain bounding boxes, but if desired empty files can be written for empty patches
-    as well). 
+    patch a set of annotations (boxes or points) that lie within that patch.
     Arguments: 
-        source_dir_img (str):           path to the directory where the image is stored
-        img (dict):                     dictionary containing the image metadata
+        img_path  (str):                path to the directory where the image is stored
+        img2ann (dict):                 dictionary mapping image names (= file name without file extension)
+        classes (list):                 list containing class ids
+        data_ann_format (str):          string specifying the format of the ground truth annotations
+        model_ann_fomrat (str):         annotation format expected by the downstream model.
         boxes_in (bbol):                must be set to true if the input annotations contain bounding boxes
         boxes_out (bool):               if false, return point labels instead of bounding boxes. Must be set to false
-                                        when working iwht point labels. 
-        img_id_to_ann (dict):           a dictionary mapping image ids to lists of annotations contained
-                                        in the respective images. bounding boxes are expected in the COCO-format.
-        data_ann_format (str):          format of the annotations in the data
-        model_ann_fomrat (str):         annotation format expected by the downstream model.
-        patch_dims (dict):              dict specifying the dimensions of the patches.
-        patch_overlap (float):          overlap between patches.
-        patch_jpeg_quality (int):       quality of the patch-images
-        classes:                        list of classes in the datset
+                                        when working with point labels. 
+        patch_dims (dict):              dict specifying the dimensions of the patches
+        patch_overlap (float):          overlap between patches    
+        patch_jpeg_quality (int):       quality of the patch-images  
+        output_dir (str):               path to the directory where the patch images and annotations will be stored.
+        box_dims (dict):                dictionary specifying the dimensions of bounding boxes. If not set,  box dimensions
+                                        will be extracted from the annotations
+        radii (dict):                   dictionary containing the radii for each class         
         visualize (bool):               if true, the annotations are drawn into the image and the patches,
-                                        which are then written into a specified directory.
-        patch_data_dir (str):           path to the directory where the patches and annotations will be stored.
-        box_dims (dict):                dictionary specifying the dimensions of bounding boxes. Can be set manually in
-                                        cases where the annotations contain arbitrary bbox dimensions and only the centers
-                                        are reliable (as is allegedly the case in the Izembek dataset). Otherwise, 
-                                        the box dimensions will be extracted from the annotations.
-        radii (dict):                   dictionary containing the radii for each class. These values will be used as a
-                                        distance-threshold (pixel-based Euclidean distance) beyond which detections 
-                                        are considered false positive when running localization. 
+                                        and the visualizations are then stored in 'vis_output_dir'       
         vis_output_dir (str):           path to the directory where the visualizations will be stored
     Returns: 
-        a dictionary containing:    1.  a dictionary mapping patch names to metadata for all bounding boxes 
-                                        that lie within the respective patches
-                                    2.  the number of patches extracted from the image 
-                                    3.  the number of annotations found in the image
-                                    4.  the number of boxes that had to be clipped during the patching.
+        a dictionary containing:    1.  a dictionary mapping patch names to patch metadata (coordinates, annotations, etc.)
+                                        for non-empty patches
+                                    2.  a dictionary mapping patch names to patch metadata (coordinates, annotations, etc.)
+                                        for empty patches
+                                    3.  the total number of patches extracted from the image 
+                                    4.  the number of non-empty patches extracted from the image
+                                    5.  the number of annotations found in the image
+                                    6.  the number of boxes that had to be clipped during the patching.
+                                    7.  the class distribution in the image
     """
 
     pil_img = visutils.open_image(img_path)
-    img_name = Path(img_path).name
+    img_name = Path(img_path).stem
 
     if radii: 
         # make sure there is a radius for every class
         assert len(classes) == len(list(radii.keys())) and all(cat in radii.keys() for cat in classes), \
-        f"Found classes {classes}, but raddi only for {list(radii.keys())}"
+        f"Found classes {classes}, but radii only for {list(radii.keys())}"
 
     annotations = img2ann[img_name]
     pos_patch_metadata_mapping_img = {}
@@ -446,7 +454,7 @@ def process_image(img_path: str, img2ann: dict, classes: list, data_ann_format: 
         if not gt:
             patch_name = patch_info2name(img_name, patch_coords["x_min"], patch_coords["y_min"],
                                              is_empty=True)
-            patch_ann_file = Path(patch_data_dir) / f"{patch_name}.txt"
+            patch_ann_file = Path(output_dir) / f"{patch_name}.txt"
                 
             patch_metadata = {
                 "patch_name": patch_name,
@@ -454,7 +462,10 @@ def process_image(img_path: str, img2ann: dict, classes: list, data_ann_format: 
                 "patch_x_min": patch_coords["x_min"],
                 "patch_y_min": patch_coords["y_min"],
                 "patch_x_max": patch_coords["x_max"],
-                "patch_y_max": patch_coords["y_max"]
+                "patch_y_max": patch_coords["y_max"], 
+                "boxes": None,
+                "points": None, 
+                "class_distribution": None
             }
         
             neg_patch_metadata_mapping_img[patch_name] = patch_metadata
@@ -466,12 +477,12 @@ def process_image(img_path: str, img2ann: dict, classes: list, data_ann_format: 
 
             patch_name = patch_info2name(img_name, patch_coords["x_min"], patch_coords["y_min"],
                                          is_empty=False)
-            patch_ann_file = Path(patch_data_dir) / f"{patch_name}.txt"
+            patch_ann_file = Path(output_dir) / f"{patch_name}.txt"
             
 
             patch_metadata = {
                 "patch_name": patch_name,
-                "original_image_id": img_name,
+                "original_image_name": img_name,
                 "patch_x_min": patch_coords["x_min"],
                 "patch_y_min": patch_coords["y_min"],
                 "patch_x_max": patch_coords["x_max"],
@@ -502,7 +513,7 @@ def process_image(img_path: str, img2ann: dict, classes: list, data_ann_format: 
         assert patch_im.size[1] == patch_dims["height"]
         
 
-        patch_image_file = Path(patch_data_dir) / f"{patch_name}.jpg"
+        patch_image_file = Path(output_dir) / f"{patch_name}.jpg"
         assert not patch_image_file.exists()
         patch_im.save(patch_image_file, quality=patch_jpeg_quality)
         
@@ -524,11 +535,10 @@ def process_image(img_path: str, img2ann: dict, classes: list, data_ann_format: 
                 
         assert Path.exists(patch_ann_file)
 
-        if visualize:
-            vis_processed_img(img=img, source_dir_img=source_dir_img, img_id_to_ann=img_id_to_ann, 
-                            data_ann_format=data_ann_format, model_ann_format=model_ann_format, 
-                            patch_metadata_mapping_img=pos_patch_metadata_mapping_img, patch_dims=patch_dims, 
-                            boxes_in=boxes_in, boxes_out=boxes_out, output_dir=vis_output_dir)
+        if visualize and gt:
+            vis_processed_img(img_path=img_path, img2ann=img2ann, data_ann_format=data_ann_format, model_ann_format=model_ann_format, 
+                              patch_metadata_mapping_img=pos_patch_metadata_mapping_img, patch_dims=patch_dims, boxes_in=boxes_in, 
+                              boxes_out=boxes_out, output_dir=vis_output_dir)
 
     # sanity check
     assert len(patch_start_positions) == (len(pos_patch_metadata_mapping_img) + len(neg_patch_metadata_mapping_img))
@@ -546,16 +556,14 @@ def process_image(img_path: str, img2ann: dict, classes: list, data_ann_format: 
 
 def vis_processed_img(img_path, img2ann: dict, data_ann_format: str, model_ann_format: str, patch_metadata_mapping_img: dict, patch_dims: dict, 
                       boxes_in: bool, boxes_out: bool, output_dir: str, circle_radius: int = 3) -> None:
-    #TODO: comments
     """
     Draws annotations into the provided image and the corresponding patches. Image and patches are then stored in the specified 
     directory.
-    Arguments:
-        img (dict):                         dictionary containing the image metadata
-        source_dir_img (str):               path to the directoryt where the image is stored
-        img_id_to_ann (dict):               a dictionary mapping image ids to lists of annotations contained
-                                            in the respective images. Bounding boxes are expected in the COCO-format.
-        ann_format (str):                   format of the annotations. 
+    Arguments 
+        img_path  (str):                path to the directory where the image is stored
+        img2ann (dict):                 dictionary mapping image names (= file name without file extension)
+        data_ann_format (str):          string specifying the format of the ground truth annotations
+        model_ann_fomrat (str):         annotation format expected by the downstream model.
         patch_metadata_mapping_img (dict):  dictionary containing the metadata for all patches of the image in question
         patch_dims (dict):                  dictionary containing the dimensions of patches
         boxes_in (bbol):                    must be set to true if the input annotations contain bounding boxes
@@ -566,13 +574,14 @@ def vis_processed_img(img_path, img2ann: dict, data_ann_format: str, model_ann_f
     Returns:
         None
     """
-    img_name = Path(img_path.name)
+    img_name = Path(img_path).stem
 
-    output_path = Path(output_dir) / img_name.split(".")[0]
+    output_path = Path(output_dir) / img_name
     output_path.mkdir(parents=False, exist_ok=True)
 
     img_arr = cv2.imread(img_path)
 
+    # plot entire image with annotations
     for ann in img2ann[img_name]:
         label = ann[DATA_ANN_FORMATS[data_ann_format]["label_key"]]
         
@@ -596,8 +605,10 @@ def vis_processed_img(img_path, img2ann: dict, data_ann_format: str, model_ann_f
             cv2.circle(img=img_arr, center=(x_center, y_center), radius=circle_radius, 
                        color=(0, 0, 255), thickness=-1)
 
-    cv2.imwrite(str(output_path/f"full_img_{img_name}"), img_arr)
+    cv2.imwrite(str(output_path/f"full_img_{img_name}.jpg"), img_arr)
 
+
+    # draw annotations into patches
     for key in patch_metadata_mapping_img:
         patch_dict = patch_metadata_mapping_img[key]
         patch_arr = img_arr[patch_dict["patch_y_min"] : patch_dict["patch_y_max"] + 1, patch_dict["patch_x_min"] : 
@@ -654,19 +665,48 @@ def vis_processed_img(img_path, img2ann: dict, data_ann_format: str, model_ann_f
 
 
 
-def patchify_imgs(img_paths: list, img2ann: dict, classes: list, boxes_in: bool, boxes_out: bool, data_ann_format: str, model_ann_format: str, patch_dims: dict, 
-                  patch_overlap: float, patch_jpeg_quality: int, neg_frac: float, output_dir: str, box_dims: dict = None, radii: dict = None, 
-                  rm_orig_imgs: bool = False, n_debug_imgs: int = -1, vis_prob: float = 0.0, vis_output_dir: str = None) -> None:
+def patchify_imgs(img_paths: list, img2ann: dict, classes: list, data_ann_format: str, model_ann_format: str, boxes_in: bool, boxes_out: bool, patch_dims: dict, 
+                  patch_overlap: float, neg_frac: float, output_dir: str, box_dims: dict = None, radii: dict = None, patch_jpeg_quality: int = 95,
+                  rm_orig_imgs: bool = False, n_debug_imgs: int = -1, vis_prob: float = 0.0, vis_output_dir: str = None) -> dict:
+    
+    """
+    Patchify a set of images. The amount of empty patches to be kept can be set via the 'neg_frac' parameter. 
+    Arguments:
+        img_path  (str):                path to the directory where the image is stored
+        img2ann (dict):                 dictionary mapping image names (= file name without file extension)
+        classes (list):                 list containing class ids
+        data_ann_format (str):          string specifying the format of the ground truth annotations
+        model_ann_fomrat (str):         annotation format expected by the downstream model.
+        boxes_in (bbol):                must be set to true if the input annotations contain bounding boxes
+        boxes_out (bool):               if false, return point labels instead of bounding boxes. Must be set to false
+                                        when working with point labels. 
+        patch_dims (dict):              dict specifying the dimensions of the patches
+        patch_overlap (float):          overlap between patches    
+        neg_frac (float):               fraction of empty patches to keep
+        output_dir (str):               path to the directory where the patch images and annotations will be stored.
+        box_dims (dict):                dictionary specifying the dimensions of bounding boxes. If not set,  box dimensions
+                                        will be extracted from the annotations
+        radii (dict):                   dictionary containing the radii for each class  
+        patch_jpeg_quality (int):       quality of the patch-images  
+        rm_orig_imgs (bool):            if true, the full images are deleted after patchifying
+        n_debug_imgs (int):             amount of images to process. If set to -1, all images are processed
+        vis_prob (float):               probability that a processed image is visualized (i.e., plotted with the corresponding
+                                        annotations)
+        vis_output_dir (str):           path to the directory where plotted images can be stored. 
+    Return: 
+        A dictionary indicating the class distribution in the data. 
+    
+
+    """
     
     all_pos_patches_mapping = {}
     all_neg_patches_mapping = {}
+    overall_distr = {cls_id: 0 for cls_id in classes}
     n_anns = 0
     n_boxes_clipped_total = 0
     n_patches_with_ann= 0
     n_patches_with_ann = 0
     n_patches_total = 0
-
-    overall_distr = {cls_id: 0 for cls_id in classes}
     
     for i_img, p in tqdm(enumerate(img_paths), total=len(img_paths)):
         if n_debug_imgs > 0 and i_img > n_debug_imgs:
@@ -686,7 +726,7 @@ def patchify_imgs(img_paths: list, img2ann: dict, classes: list, boxes_in: bool,
                                patch_overlap=patch_overlap, 
                                patch_jpeg_quality=patch_jpeg_quality,
                                visualize=visualize,
-                               patch_data_dir=output_dir,
+                               output_dir=output_dir,
                                box_dims=box_dims, 
                                radii=radii, 
                                vis_output_dir=vis_output_dir)
@@ -729,114 +769,9 @@ def patchify_imgs(img_paths: list, img2ann: dict, classes: list, boxes_in: bool,
     
 
 
-    print(f"\n\n\nTotal number of images/patches processed: {len(img2ann)}/{n_patches_total}\n\n"
-          f"\tProcessed {n_anns} points.\n"
-          f"\tOut of {n_patches_total} patches, {n_patches_with_ann} patches containing valid annotations were obtained.\n" \
-          f"\t Class distribution: {overall_distr}\n" \
+    print(f"\n\n\nTotal number of images/patches processed: {len(img2ann)}/{n_patches_total}\n"
+          f"Processed {n_anns} points.\n"
+          f"Out of {n_patches_total} patches, {n_patches_with_ann} patches containing valid annotations were obtained.\n" \
           f"{n_negs} empty patches were kept.\n")
-
-
-
-
-def generate_train_val_splits(pos_patches_mapping: dict, neg_patches_mapping: dict, val_frac: float, neg_frac: float, 
-                              category_id_to_name: dict, base_dir: str, train_dir: str, val_dir: str, 
-                              radii: dict = None) -> dict:
-    """
-    Generate the training-, and validation-split from a dictionary mapping patches to metadata. 
-    The method takes a path to the base directory, where all the patch image-, and annotation-files are stored, 
-    and moves them to the correct folders according to the generated splits. 
-    Arguments: 
-        pos_patches_mapping (dict):     dict mapping patch ids to metadata for patches that contain annotations 
-        neg_patches_mapping (dict):     dict mapping patch ids to metadata for empty patches                    
-        val_frac (float):               fraction of patches to be used for validation
-        neg_frac (float):               fraction of negative (empty) samples to add to the training data
-        category_id_to_name (dict):     dictionary mapping category ids to categpry names
-        base_dir (str):                 path to the base directory
-        train_dir (str):                path to the training data directory
-        val_dir (str):                  path to the validation data directory
-        radii (dict):                   dictionary containing the radii for each class. These values will be used as a
-                                        distance-threshold (pixel-based Euclidean distance) beyond which detections 
-                                        are considered false positive when running localization.
-    Returns:
-        Dictionary containing information (class distribution and size) about the splits
-    """
-
-    pos_patches_ids = list(pos_patches_mapping.keys())
-    neg_patches_ids = list(neg_patches_mapping.keys())
-
-    n_val_patches = int(val_frac*len(pos_patches_ids))
-    n_train_patches = len(pos_patches_ids) - n_val_patches
-
-    # add correct amount of negative samples if possible (enough empty patches)
-    desired_total = int(math.floor(n_train_patches / (1 - neg_frac)))
-    n_negs = desired_total - n_train_patches
-    random.shuffle(neg_patches_ids)
-    train_patches_ids_neg = neg_patches_ids[:n_negs] if n_negs < len(neg_patches_ids) else neg_patches_ids
-    negs_not_used = [neg_id for neg_id in neg_patches_ids if neg_id not in train_patches_ids_neg]
-
-    # create splits
-    random.shuffle(pos_patches_ids)
-    val_patches_ids = pos_patches_ids[:n_val_patches]
-    train_patches_ids = pos_patches_ids[n_val_patches:]
-    train_patches_ids.extend(train_patches_ids_neg)
-
-    with open(f"{train_dir}/train_mapping.json","w") as f:
-        json.dump(train_patches_ids,f,indent=1)
-        
-    with open(f"{val_dir}/val_mapping.json","w") as f:
-        json.dump(val_patches_ids,f,indent=1)
-
-
-    # Copy annotation files to train/val/test folders and collect split statistics
-    train_distribution = {cat: 0 for cat in category_id_to_name.keys()}
-    val_distribution = {cat: 0 for cat in category_id_to_name.keys()}
-
-
-    # For each patch
-    for patch_name in tqdm((train_patches_ids + val_patches_ids), total=len(train_patches_ids + val_patches_ids)):
-        
-        # Make sure we have an annotation file
-        src_path_ann = f"{base_dir}/{patch_name}.txt"
-        src_path_img = f"{base_dir}/{patch_name}.jpg"
-        
-        assert Path.exists(Path(src_path_ann)) and Path.exists(Path(src_path_img))
-        
-        # Copy files to the place it belongs and collect class distributions
-        if patch_name in train_patches_ids:
-            if "empty" not in patch_name:
-                for class_id in train_distribution.keys():
-                    train_distribution[class_id] += pos_patches_mapping[patch_name]["class_distribution"][class_id]
-            target_folder = train_dir
-        elif patch_name in val_patches_ids:
-            for class_id in val_distribution.keys():
-                val_distribution[class_id] += pos_patches_mapping[patch_name]["class_distribution"][class_id]
-            target_folder = val_dir
-
-        target_path_ann = f"{target_folder}/{Path(src_path_ann).name}"
-        target_path_img = f"{target_folder}/{Path(src_path_img).name}"
-        shutil.move(src_path_ann, target_path_ann)
-        shutil.move(src_path_img, target_path_img)
-
-    #Generate the YOLO training dataset file
-    with open(f"{base_dir}/dataset.yaml","w") as f:
-        train_dir_rel = Path(train_dir).relative_to(base_dir)
-        val_dir_rel = Path(val_dir).relative_to(base_dir)
-        
-        f.write("# Train/val/test sets\n" \
-                f"path: {base_dir}\n" \
-                f"train: {train_dir_rel}\n" \
-                f"val: {val_dir_rel}\n" \
-                "\n" \
-                "# Classes\n" \
-                "names:\n")
-        
-        for class_id,class_name in category_id_to_name.items():
-            f.write(f"  {class_id}: {class_name.strip()}\n")
-        if radii: 
-            f.write("\nradii:\n")
-            for class_id, radius in radii.items():
-                f.write(f"  {class_id}: {radius}\n")
-
-    return {"train": {"distribution": train_distribution, "size": len(train_patches_ids), "empty": len(train_patches_ids_neg)},
-            "val": {"distribution": val_distribution, "size": len(val_patches_ids)}}, negs_not_used
-
+    
+    return overall_distr

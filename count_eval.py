@@ -292,8 +292,6 @@ def compute_errors_SAHI(gt_counts_dir: str, SAHI_preds_file: str, SAHI_dataset_f
 
 
 
-
-
 def get_eval_metrics(dets_dir: str, class_ids: list, class_names: list, task: str, output_dir: str = None, k: int = 3) -> None:
     """
     Aggregate image level confusion matrices  into a global confusion matrix. Also generates a .csv file that for each image 
