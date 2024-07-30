@@ -29,12 +29,14 @@ PT_VIS_RADIUS = 3
 
 
 
-def load_img_gt(annotations: dict,  ann_format: str, task: str, device=torch.device, box_dims: dict = None) -> tuple[torch.Tensor, torch.Tensor]:
+def load_img_gt(annotations: dict, boxes_in: bool, boxes_out: bool,  ann_format: str, device=torch.device, box_dims: dict = None) -> tuple[torch.Tensor, torch.Tensor]:
 
     """
     Expects the annotations in an image as a dictionary of dictionaries, and from that creates tensors for the ground truth labels. 
     Arguments:
         annotations (dictionary):           dictionary containing all annotations (as dictionaries) within the image under consideration.
+        boxes_in (bool):                    if true, ground truth labels are expected as box annotations
+        boxes_out (bool):                   if true, retrieved labels will be returned as boxes
         ann_format (string):                string indicatin the annotation format
         task (string):                      string indicating the prediction task
         device (torch.device):              device on which to store the gt tensors
@@ -44,11 +46,11 @@ def load_img_gt(annotations: dict,  ann_format: str, task: str, device=torch.dev
     """
     coords_list = []
     cls_list = []
-
+    n_coords = 4 if boxes_out else 2
     for ann in annotations:
         label = ann[DATA_ANN_FORMATS[ann_format]["label_key"]]
 
-        if task == "detect":
+        if boxes_out:
             x_center = label[DATA_ANN_FORMATS[ann_format]["x_min_idx"]] + (label[DATA_ANN_FORMATS[ann_format]["width_idx"]] / 2.0)
             y_center = label[DATA_ANN_FORMATS[ann_format]["y_min_idx"]] + (label[DATA_ANN_FORMATS[ann_format]["height_idx"]] / 2.0)
             
@@ -66,18 +68,24 @@ def load_img_gt(annotations: dict,  ann_format: str, task: str, device=torch.dev
             ymax = y_center + (box_dims_checked["height"]/2.0)
             coords_list.append([xmin, ymin, xmax, ymax])
         else:
-            warnings.warn("Retrieving ground truths for point annotations hasn't been tested yet!")
-            coords_list.append([label[DATA_ANN_FORMATS[ann_format]["x_idx"]], label[DATA_ANN_FORMATS[ann_format]["y_idx"]]])
+            if boxes_in:
+                x = label[DATA_ANN_FORMATS[ann_format]["x_min_idx"]] + (label[DATA_ANN_FORMATS[ann_format]["width_idx"]] / 2.0)
+                y = label[DATA_ANN_FORMATS[ann_format]["y_min_idx"]] + (label[DATA_ANN_FORMATS[ann_format]["height_idx"]] / 2.0) 
+            else: 
+                warnings.warn("Retrieving ground truths as point annotations hasn't been tested yet!")
+                x = label[DATA_ANN_FORMATS[ann_format]["x_idx"]]
+                y = label[DATA_ANN_FORMATS[ann_format]["y_idx"]]
+
+            coords_list.append([x,y])
     
         cls_list.append(ann["category_id"])
 
-
-    coords_t = torch.tensor(coords_list, device=device)
-    
-    # sanity check 
-    assert coords_t.shape[1] == len(coords_list[0])
-
-    cls_t = torch.tensor(cls_list, device=device)
+    if not coords_list:
+        coords_t = torch.empty((0, n_coords))
+        cls_t = torch.empty((0, 1))
+    else: 
+        coords_t = torch.tensor(coords_list, device=device)
+        cls_t = torch.tensor(cls_list, device=device)
 
     return coords_t, cls_t 
 
@@ -156,8 +164,14 @@ def collect_locations(predictions: list, class_ids: list, patches: list, device:
 
         # write patch level predictions to file
         if patch_output_dir:
+            warnings.warn("This functionality is buggy!")
             patch_count = {cls_id: 0 for cls_id in class_ids}
-            pred_counts = torch.bincount(data.cls.int())
+            """
+            As the warning says, something is wrong here. Specifically, running the below two lines and the 
+            for-loop yields different (much less accurate) img-level counts. I have no idea why. 
+            """
+            counts_t = torch.clone(data.cls)
+            pred_counts = torch.bincount(counts_t.int())
 
             for i in range(pred_counts.size(dim=0)):
                 patch_count[i] = pred_counts[i].item()
@@ -306,7 +320,7 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
                             "x_max": patch[0] + patch_dims["width"] - 1,
                             "y_max": patch[1] + patch_dims["height"] - 1}
             
-            patch_name = patch_info2name(image_name=fn.name, patch_x_min=patch_coords['x_min'], patch_y_min=patch_coords['y_min'])
+            patch_name = patch_info2name(image_name=fn.stem, patch_x_min=patch_coords['x_min'], patch_y_min=patch_coords['y_min'])
             patch_fn = f"{tiling_dir}/{patch_name}.jpg"
             
             patch_metadata = {"patch_fn": patch_fn,
@@ -326,6 +340,7 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
     
         # create folder to store original patch level predictions
         if save_patch_data:
+            raise NotImplementedError("Functionality not properly implemented!")
             patch_data_dir = Path(det_dir).parent / "patch_data"
             patch_data_dir.mkdir(parents=False, exist_ok=True)
             patch_output_dir = f"{patch_data_dir}/{fn.stem}"
@@ -372,8 +387,10 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
         # If annotations are available, collect evaluation metrics at the image level 
         if ann_file:
             cfm_img = ConfusionMatrix(nc=len(class_ids), task=task)
-            gt_coords, gt_cls = load_img_gt(annotations=ann_dict[fn.name], task=task, ann_format=ann_format, device=coords.device, 
-                                            box_dims=box_dims)
+            boxes_in = "BX" in ann_format
+            boxes_out = task == "detect"
+            gt_coords, gt_cls = load_img_gt(annotations=ann_dict[fn.stem], boxes_in=boxes_in, boxes_out=boxes_out, ann_format=ann_format, 
+                                            device=coords.device, box_dims=box_dims)
             
             if task == "detect":
                 cfm_img.process_batch(detections=preds_img_final, gt_bboxes=gt_coords, gt_cls=gt_cls)

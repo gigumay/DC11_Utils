@@ -324,3 +324,89 @@ def get_total_counts_SAHI(sahi_results: str, class_ids: list) -> None:
     output_fn = f"{Path(sahi_results).parent}/counts_total.json"
     with open(output_fn, "w") as f:
         json.dump(total_counts, f, indent=1)
+
+
+def compute_errors_patch_lvl(patch_data_dir: str, ann_file: str, task: str, class_ids: list, data_ann_format: str, output_dir: str,
+                             box_dims: dict = None) -> dict:
+    """
+    Given a directory containing the patch predictions for an image set, compute the patch level MAE and MSE
+    """
+    assert task in ["detect", "locate"]
+    
+    counter = 0
+    mae_overall = {cls_id: 0 for cls_id in class_ids}
+    mae_overall["overall"] = 0
+    mse_overall = {cls_id: 0 for cls_id in class_ids}
+    mse_overall["overall"] = 0    
+
+    with open(ann_file, "r") as f:
+        all_anns = json.load(f)
+
+    for child in Path(patch_data_dir).iterdir():
+        if child.is_dir():
+            fn = child.stem
+            key = [img_name for img_name in all_anns.keys() if fn in img_name]
+            assert len(key) == 1
+            ann_dict = all_anns[key[0]]
+
+            for patch_file in Path(child).iterdir():
+                patch_str = patch_file.stem
+                xmin_patch = int(patch_str.split('_')[0])
+                ymin_patch = int(patch_str.split('_')[1])
+
+                with open(patch_file, "r") as f:
+                    patch_counts = json.load(f)
+
+                gt_patch = {cls_id: 0 for cls_id in class_ids}
+
+                for ann in ann_dict:
+                    label = ann[DATA_ANN_FORMATS[data_ann_format]["label_key"]]
+                    cat = ann[DATA_ANN_FORMATS[data_ann_format]["category_key"]]
+                    if data_ann_format == "BX_WH":
+                        x_center = label[DATA_ANN_FORMATS[data_ann_format]["x_min_idx"]] + \
+                                   (label[DATA_ANN_FORMATS[data_ann_format]["width_idx"]] / 2.0)
+                        y_center = label[DATA_ANN_FORMATS[data_ann_format]["y_min_idx"]] + \
+                                   (label[DATA_ANN_FORMATS[data_ann_format]["height_idx"]] / 2.0)
+
+                        box_dims_checked = {}
+
+                        if box_dims:
+                            box_dims_checked["width"] = box_dims["width"]
+                            box_dims_checked["height"] = box_dims["height"]
+                        else: 
+                            box_dims_checked["width"] = label[DATA_ANN_FORMATS[data_ann_format]["width_idx"]]
+                            box_dims_checked["height"] = label[DATA_ANN_FORMATS[data_ann_format]["height_idx"]]
+
+                        xmax = x_center + (box_dims_checked["width"]/2.0)
+                        ymax = y_center + (box_dims_checked["height"]/2.0)
+                        if task == "detect":
+                            within_patch = xmax > xmin_patch and ymax > ymin_patch
+                        if task == "locate":
+                            within_patch = x_center >= xmin_patch and y_center >= ymin_patch
+
+
+                    if data_ann_format == "PT_DEFAULT":
+                        x_ann= label["x_idx"]
+                        y_ann = label["y_idx"]
+                        within_patch = x_ann >= xmin_patch and y_ann >= ymin_patch
+
+                    if within_patch:
+                        gt_patch[cat] += 1
+
+                abs_err = {cls_id: abs(gt_patch[cls_id] - patch_counts[str(cls_id)]) for cls_id in class_ids}
+                overall = abs(sum(gt_patch.values()) - sum(patch_counts.values()))
+                for cls_id in class_ids:
+                    mae_overall[cls_id] += abs_err[cls_id]
+                    mse_overall[cls_id] += abs_err[cls_id] **2
+                mae_overall["overall"] += overall
+                mse_overall["overall"] += overall **2
+
+                counter += 1
+
+    results = {cls_id: {"MAE": mae_overall[cls_id] / counter, "MSE": mse_overall[cls_id] / counter} for cls_id in class_ids}
+    results["overall"] = {"MAE": mae_overall["overall"] / counter, "MSE": mse_overall["overall"] / counter}
+    
+    with open(f"{output_dir}/errors_patch_lvl.json", "w") as f:
+        json.dump(results, f, indent=1)
+
+    return results

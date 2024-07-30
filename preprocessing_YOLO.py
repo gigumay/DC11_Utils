@@ -7,7 +7,7 @@ import cv2
 import random 
 import shutil
 
-from pathlib import Path
+from pathlib import PurePath, Path
 from tqdm import tqdm
 from pathlib import Path
 from globs import *
@@ -16,37 +16,33 @@ from processing_utils import *
 import visualization_utils as visutils
 
 
-def split_dataset(dataset_dir: str, img_format: str, val_frac: float, test_frac: float, rm_copies: bool = False, output_dir: str = None) -> tuple[dict, dict]:
+def split_dataset(img_paths: list, val_frac: float, test_frac: float, output_dir: str = None, rm_copies: bool = False) -> tuple[dict, dict]:
     """
     Split a dataset into training-, validation, and test set. Creates a "train", "val" and "test" directory in the specified output 
     directory, containing the corresponding images. 
     Arguments:
-        dataset_dir (str):          path to the directory containing the dataset to be split.
-        img_format (str):           format of the image files. Will be used to select which files in the 
-                                    data directory to select for splitting.
+        img_paths (list):           list containing paths to all image files to be considered for splitting. 
         val_frac (float):           fraction of the data to be used for validation.
         test_frac (float):          fraction of the data to be used for testing.
-        rm_copies (bool):           whether to keep copies of the image files. 
         output_dir (str):           path to the directory where the splits will be stored. 
+        rm_copies (bool):           whether to keep copies of the image files. 
     Returns:
         Two dictionaries: one containign the paths to the "train", "val" and "test" directories, and one mapping 
         splits to image names. 
     """
-    if not output_dir:
-        output_dir = dataset_dir
 
     splits = {"train": [], "val": [], "test": []}
-
-    img_fns = list(Path(dataset_dir).glob(f"*.{img_format}"))
    
-    n_test_imgs = int(math.ceil(test_frac * len(img_fns)))
-    n_val_imgs = int(math.ceil(val_frac * len(img_fns)))
+    n_test_imgs = int(math.ceil(test_frac * len(img_paths)))
+    n_val_imgs = int(math.ceil(val_frac * len(img_paths)))
 
-    random.shuffle(img_fns)
+    paths_checked = [p if isinstance(p, PurePath) else Path(p) for p in img_paths]
+    random.shuffle(paths_checked)
 
-    test_fns = img_fns[:n_test_imgs]
-    val_fns = img_fns[n_test_imgs:(n_test_imgs + n_val_imgs)]
-    train_fns = img_fns[n_test_imgs + n_val_imgs:] 
+
+    test_fns = paths_checked[:n_test_imgs]
+    val_fns = paths_checked[n_test_imgs:(n_test_imgs + n_val_imgs)]
+    train_fns = paths_checked[n_test_imgs + n_val_imgs:] 
     
     test_dir = f"{output_dir}/test"
     val_dir = f"{output_dir}/val"
@@ -662,13 +658,13 @@ def vis_processed_img(img_path, img2ann: dict, data_ann_format: str, model_ann_f
 
 def patchify_imgs(img_paths: list, img2ann: dict, classes: list, data_ann_format: str, model_ann_format: str, boxes_in: bool, boxes_out: bool, patch_dims: dict, 
                   patch_overlap: float, neg_frac: float, output_dir: str, box_dims: dict = None, radii: dict = None, patch_jpeg_quality: int = 95,
-                  rm_orig_imgs: bool = False, n_debug_imgs: int = -1, vis_prob: float = 0.0, vis_output_dir: str = None) -> dict:
+                  rm_orig_imgs: bool = False, n_debug_imgs: int = -1, vis_prob: float = -1.0, vis_output_dir: str = None) -> dict:
     
     """
     Patchify a set of images. The amount of empty patches to be kept can be set via the 'neg_frac' parameter. 
     Arguments:
         img_path  (str):                path to the directory where the image is stored
-        img2ann (dict):                 dictionary mapping image names (= file name without file extension)
+        img2ann (dict):                 dictionary mapping image names (= file name without file extension) to a list of annotations
         classes (list):                 list containing class ids
         data_ann_format (str):          string specifying the format of the ground truth annotations
         model_ann_fomrat (str):         annotation format expected by the downstream model.
@@ -708,7 +704,8 @@ def patchify_imgs(img_paths: list, img2ann: dict, classes: list, data_ann_format
             break
 
         # visualize some outputs at random
-        visualize = ((random.randint(0, 1000) / 1000)) <= vis_prob
+        visualize = ((random.randint(0, 1000) / 1000)) < vis_prob
+
 
         output = process_image(img_path=p,
                                img2ann=img2ann, 
@@ -757,9 +754,10 @@ def patchify_imgs(img_paths: list, img2ann: dict, classes: list, data_ann_format
     # get number of empty patches to sample
     n_patches_all = int(math.ceil(len(all_pos_patches_mapping) / (1 - neg_frac)))
     n_negs = n_patches_all - len(all_pos_patches_mapping)
-
     random.shuffle(neg_patches)
-    negs2rm = neg_patches[n_negs:]
+
+    # remove superfluous empty patches
+    negs2rm = neg_patches[min(n_negs, len(neg_patches) - 1):]
 
     for neg_path in negs2rm:
         Path.unlink(neg_path)
@@ -768,7 +766,7 @@ def patchify_imgs(img_paths: list, img2ann: dict, classes: list, data_ann_format
 
 
     print(f"\n\n\nTotal number of images/patches processed: {len(img2ann)}/{n_patches_total}\n"
-          f"Processed {n_anns} points.\n"
+          f"Processed {n_anns} annotations.\n"
           f"Out of {n_patches_total} patches, {n_patches_with_ann} patches containing valid annotations were obtained.\n" \
           f"{n_negs} empty patches were kept.\n")
     
