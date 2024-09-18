@@ -81,10 +81,10 @@ def load_img_gt(annotations: dict, boxes_in: bool, boxes_out: bool,  ann_format:
         cls_list.append(ann["category_id"])
 
     if not coords_list:
-        coords_t = torch.empty((0, n_coords))
+        coords_t = torch.empty((0, n_coords), dtype=torch.float)
         cls_t = torch.empty((0, 1))
     else: 
-        coords_t = torch.tensor(coords_list, device=device)
+        coords_t = torch.tensor(coords_list, device=device, dtype=torch.float)
         cls_t = torch.tensor(cls_list, device=device)
 
     return coords_t, cls_t 

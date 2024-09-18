@@ -1,7 +1,6 @@
 import sys
 sys.path.append("/home/giacomo/repos/MegaDetector/md_visualization")
 
-import os
 import math
 import cv2
 import random 
@@ -273,7 +272,7 @@ def get_boxes_at_patch_lvl(annotations_in_img: list, ann_format: str, patch_dims
 
 
 def get_points_at_patch_lvl(annotations_in_img: list, ann_format: str, is_bxs: bool, patch_dims: dict, patch_coords: dict, categories: list,
-                            box_dims: dict = None) -> tuple[list, dict]:
+                            radii: dict, box_dims: dict = None) -> tuple[list, dict]:
     """
     For a given patch, create a list of point labels (as yolo-formatted dictionaries) that lie within that patch
     Arguments: 
@@ -284,6 +283,7 @@ def get_points_at_patch_lvl(annotations_in_img: list, ann_format: str, is_bxs: b
         patch_dims (dict):          dict specifying the dimensions of the patch.
         patch_coords (dict):        dict specifying the coordinates (in pixel) of the patch
         categories (list):          list of classes in the datset
+        radii (dict):               dictionary containing the radii for the different classes
         box_dims (dict):            bounding box dimensions for when box inputs are used
     Returns: 
         1.  a list containing  dictionaries with the coordinates (in pixel and at patch level) of the point labels that
@@ -317,8 +317,9 @@ def get_points_at_patch_lvl(annotations_in_img: list, ann_format: str, is_bxs: b
             #Again, relative coordinates 
             x_coords_relative_patch = gt_x_patch / patch_dims["width"]
             y_coords_relative_patch = gt_y_patch / patch_dims["height"]
+            cat = ann["category_id"]
             
-            gt_points.append([ann["category_id"], x_coords_relative_patch, y_coords_relative_patch])
+            gt_points.append([cat, radii[cat], x_coords_relative_patch, y_coords_relative_patch])
             class_distr_patch[ann["category_id"]] += 1
     
     return gt_points, class_distr_patch
@@ -326,7 +327,7 @@ def get_points_at_patch_lvl(annotations_in_img: list, ann_format: str, is_bxs: b
 
 
 def get_annotations_in_patch(annotations_in_img: list, ann_format: str, boxes_in: bool, boxes_out: bool, patch_dims: dict, patch_coords: dict, 
-                             categories: list, box_dims: dict, max_box_overhang: float = 0.85)-> tuple[list, dict, int]:
+                             categories: list, radii: dict = None, box_dims: dict = None, max_box_overhang: float = 0.85)-> tuple[list, dict, int]:
     """
     Retrieves the annotations in a given patch. 
     Arguments: 
@@ -339,6 +340,7 @@ def get_annotations_in_patch(annotations_in_img: list, ann_format: str, boxes_in
         patch_dims (dict):          dict specifying the dimensions of the patch.
         patch_coords (dict):        dict specifying the coordinates (in pixel) of the patch
         categories (list):          list of classes in the datset
+        radii (dict):               dictionary containing the radii for the different classes
         box_dims (dict):            dictionary specifying the dimensions of bounding boxes. If None, 
                                     the box dimensions will be extracted from the annotations.
         max_box_overhang (float):   maximum percentage of a bounding box that can lie outside of a patch without causing 
@@ -364,13 +366,13 @@ def get_annotations_in_patch(annotations_in_img: list, ann_format: str, boxes_in
             gt_points, class_distr = get_points_at_patch_lvl(annotations_in_img=annotations_in_img, 
                                                              ann_format=ann_format, is_bxs=True, 
                                                              patch_dims=patch_dims, patch_coords=patch_coords,
-                                                             categories=categories, box_dims=box_dims)
+                                                             categories=categories, radii=radii, box_dims=box_dims)
             return gt_points, class_distr, 0       
     else: 
          gt_points, class_distr = get_points_at_patch_lvl(annotations_in_img=annotations_in_img, 
                                                           ann_format=ann_format, is_bxs=False,
                                                           patch_dims=patch_dims, patch_coords=patch_coords, 
-                                                          categories=categories)
+                                                          categories=categories, radii=radii)
          return gt_points, class_distr, 0
         
     
@@ -443,7 +445,8 @@ def process_image(img_path: str, img2ann: dict, classes: list, data_ann_format: 
                                                                     boxes_out=boxes_out, 
                                                                     patch_dims=patch_dims, 
                                                                     patch_coords=patch_coords, 
-                                                                    categories=classes, 
+                                                                    categories=classes,
+                                                                    radii=radii, 
                                                                     box_dims=box_dims)
         
         if not gt:
@@ -522,7 +525,7 @@ def process_image(img_path: str, img2ann: dict, classes: list, data_ann_format: 
                               f"{ann[MODEL_ANN_FORMATS[model_ann_format]['height_idx']]}\n"
                 else:
                     ann_str = f"{ann[MODEL_ANN_FORMATS[model_ann_format]['category_idx']]} " \
-                              f"{radii[MODEL_ANN_FORMATS[model_ann_format]['category_idx']]} " \
+                              f"{ann[MODEL_ANN_FORMATS[model_ann_format]['radius_idx']]} " \
                               f"{ann[MODEL_ANN_FORMATS[model_ann_format]['x_idx']]} " \
                               f"{ann[MODEL_ANN_FORMATS[model_ann_format]['y_idx']]}\n"
                 
@@ -765,7 +768,7 @@ def patchify_imgs(img_paths: list, img2ann: dict, classes: list, data_ann_format
     
 
 
-    print(f"\n\n\nTotal number of images/patches processed: {len(img2ann)}/{n_patches_total}\n"
+    print(f"\n\n\nTotal number of images/patches processed: {len(img_paths)}/{n_patches_total}\n"
           f"Processed {n_anns} annotations.\n"
           f"Out of {n_patches_total} patches, {n_patches_with_ann} patches containing valid annotations were obtained.\n" \
           f"{n_negs} empty patches were kept.\n")

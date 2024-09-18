@@ -11,6 +11,10 @@ from metrics import ConfusionMatrix
 from globs import *
 
 
+def plot_count_diffs():
+    finish this; take excel file and then plot
+
+
 
 def get_test_counts(ann_file: str, class_ids: list) -> None:
     """
@@ -82,6 +86,9 @@ def compute_errors_img_lvl(gt_counts_dir: str, pred_counts_dir: str, class_ids: 
     # make empty df to collect count differences
     df_cols = ["fn"]
     df_cols.extend([str(cls_id) for cls_id in class_ids])
+    df_cols.append("overall")
+    df_cols.extend([f"{str(cls_id)}_rel" for cls_id in class_ids])
+    df_cols.append("overall_rel")
     count_diffs_df = pd.DataFrame(columns=df_cols)
 
     for fn_gt in gt_files:
@@ -103,16 +110,32 @@ def compute_errors_img_lvl(gt_counts_dir: str, pred_counts_dir: str, class_ids: 
         # if no predictions for a class were made, the count number is zero 
         pred_dict_updated = {cls_id: 0 if str(cls_id) not in pred_dict.keys() else pred_dict[str(cls_id)] for cls_id in class_ids }
 
-        # get difference an dput into df
+        # get abs difference
         diffs = {str(cls_id): [gt_dict[str(cls_id)] - pred_dict_updated[cls_id]] for cls_id in class_ids}
+        diffs["overall"] = sum(gt_dict.values()) - sum(pred_dict_updated.values())
         diffs["fn"] = [search_str]
+        # get rel difference
+        diffs_rel = {f"{k}_rel": diffs[k] / gt_dict[k] for k in gt_dict.keys()}
+        diffs_rel["overall_rel"] = diffs["overall"] / sum(gt_dict.values())
+        # merge dicts 
+        diffs.update(diffs_rel)
+        # put into df
         row_df = pd.DataFrame(diffs)
         count_diffs_df = pd.concat([count_diffs_df, row_df], ignore_index=True)
 
-    # get overall MAE and MSE per class 
+
+
+    # get stats per class 
     summary_dict = {cls_id: {"MAE": count_diffs_df[f"{cls_id}"].abs().sum() / count_diffs_df.shape[0],
                              "ME":  count_diffs_df[f"{cls_id}"].sum() / count_diffs_df.shape[0],
-                             "MSE": (count_diffs_df[f"{cls_id}"] ** 2).sum() / count_diffs_df.shape[0]} for cls_id in class_ids}
+                             "MSE": (count_diffs_df[f"{cls_id}"] ** 2).sum() / count_diffs_df.shape[0],
+                             "MARE": count_diffs_df[f"{cls_id}_rel"].abs().sum() / count_diffs_df.shape[0]} for cls_id in class_ids}
+    
+    # get overall stats
+    summary_dict["overall"] = {"MAE": count_diffs_df["overall"].abs().sum() / count_diffs_df.shape[0],
+                               "ME":  count_diffs_df["overall"].sum() / count_diffs_df.shape[0],
+                               "MSE": (count_diffs_df["overall"] ** 2).sum() / count_diffs_df.shape[0],
+                               "MARE": count_diffs_df["overall_rel"].abs().sum() / count_diffs_df.shape[0]}
     
     # output
     with open(f"{output_dir}/errors_img_lvl.json", "w") as f:
