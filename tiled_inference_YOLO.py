@@ -386,7 +386,7 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
         
         # If annotations are available, collect evaluation metrics at the image level 
         if ann_file:
-            cfm_img = ConfusionMatrix(nc=len(class_ids), task=task)
+            cfm_img = ConfusionMatrix(nc=len(class_ids), task=task, dor_thresh=dor_thresh)
             boxes_in = "BX" in ann_format
             boxes_out = task == "detect"
             gt_coords, gt_cls = load_img_gt(annotations=ann_dict[fn.stem], boxes_in=boxes_in, boxes_out=boxes_out, ann_format=ann_format, 

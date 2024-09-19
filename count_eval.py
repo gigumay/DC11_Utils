@@ -6,14 +6,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from metrics import ConfusionMatrix
 from globs import *
-
-
-def plot_count_diffs():
-    finish this; take excel file and then plot
-
 
 
 def get_test_counts(ann_file: str, class_ids: list) -> None:
@@ -91,6 +87,13 @@ def compute_errors_img_lvl(gt_counts_dir: str, pred_counts_dir: str, class_ids: 
     df_cols.append("overall_rel")
     count_diffs_df = pd.DataFrame(columns=df_cols)
 
+    # collect gt and predicted counts to plot later
+    gts = {cls_id: [] for cls_id in class_ids}
+    gts["overall"] = []
+    preds = {cls_id: [] for cls_id in class_ids}
+    preds["overall"] = []
+
+
     for fn_gt in gt_files:
         
         # get matching prediction file for a gt file 
@@ -107,16 +110,24 @@ def compute_errors_img_lvl(gt_counts_dir: str, pred_counts_dir: str, class_ids: 
         with open(fn_pred, "r") as pred:
             pred_dict = json.load(pred)
 
+
         # if no predictions for a class were made, the count number is zero 
-        pred_dict_updated = {cls_id: 0 if str(cls_id) not in pred_dict.keys() else pred_dict[str(cls_id)] for cls_id in class_ids }
+        pred_dict_updated = {cls_id: 0 if str(cls_id) not in pred_dict.keys() else pred_dict[str(cls_id)] for cls_id in class_ids}
+        
+        # store predictions in list 
+        for cls_id in class_ids:
+            gts[cls_id].append(gt_dict[str(cls_id)])
+            gts["overall"].append(sum(gt_dict.values()))
+            preds[cls_id].append(pred_dict_updated[cls_id])
+            preds["overall"].append(sum(pred_dict_updated.values()))
 
         # get abs difference
         diffs = {str(cls_id): [gt_dict[str(cls_id)] - pred_dict_updated[cls_id]] for cls_id in class_ids}
-        diffs["overall"] = sum(gt_dict.values()) - sum(pred_dict_updated.values())
+        diffs["overall"] = [sum(gt_dict.values()) - sum(pred_dict_updated.values())]
         diffs["fn"] = [search_str]
         # get rel difference
-        diffs_rel = {f"{k}_rel": diffs[k] / gt_dict[k] for k in gt_dict.keys()}
-        diffs_rel["overall_rel"] = diffs["overall"] / sum(gt_dict.values())
+        diffs_rel = {f"{k}_rel": [diffs[k][0] / gt_dict[k]] if gt_dict[k] != 0 else diffs[k][0] for k in gt_dict.keys()}
+        diffs_rel["overall_rel"] = [diffs["overall"][0] / sum(gt_dict.values())]
         # merge dicts 
         diffs.update(diffs_rel)
         # put into df
@@ -137,6 +148,17 @@ def compute_errors_img_lvl(gt_counts_dir: str, pred_counts_dir: str, class_ids: 
                                "MSE": (count_diffs_df["overall"] ** 2).sum() / count_diffs_df.shape[0],
                                "MARE": count_diffs_df["overall_rel"].abs().sum() / count_diffs_df.shape[0]}
     
+    # plot counts
+    for k in gts.keys():
+        plt.scatter(gts[k], preds[k], c="purple", s=5)
+        #plt.yscale("log")
+        #plt.xscale("log")
+        plt.xlabel("True Count")
+        plt.ylabel("Predicted Count")
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/counts_gt_pred_{k}.png")
+        plt.close()
+
     # output
     with open(f"{output_dir}/errors_img_lvl.json", "w") as f:
         json.dump(summary_dict, f, indent=1)
