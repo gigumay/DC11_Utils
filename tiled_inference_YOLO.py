@@ -238,7 +238,7 @@ def plot_annotated_img(img_fn: str, coords: torch.Tensor, cls: torch.Tensor, out
     assert cv2.imwrite(f"{output_dir}/{Path(img_fn).stem}{output_ext}.jpg", img_arr), "Plotting failed!"
 
 
-def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: str, img_files_ext: str, patch_dims: dict, 
+def run_tiled_inference(model: tuple[str, YOLO], task: str, class_ids: list, imgs_dir: str, img_files_ext: str, patch_dims: dict, 
                         patch_overlap: float, output_dir: str, iou_thresh: float = None, dor_thresh: float = None, radii: dict = None, 
                         ann_file: str = None, ann_format: str = None, box_dims: dict = None, vis_prob: float = -1.0, vis_density: int = math.inf, 
                         patch_quality: int = 95, save_pre_output: bool = False, rm_tiles: bool = True, save_patch_data: bool = False, 
@@ -247,7 +247,7 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
     Perform tiled inference on a directory of images. If ground truth annotations are available, a confusion matrix is produced 
     for each image.
     Arguments:
-        model_file (str):           path to the model file (.pt) to be used for inference.
+        model (tuple[str, YOLO]):   path to the model file (.pt) to be used for inference, or already constructed model object. 
         task (str):                 task string. Can be 'detect' or 'locate'.
         class_ids (list):           list of integer class IDs in the data the model was trained on.
         imgs_dir (str):             path to the folder containing the images inference needs to be performed on.
@@ -295,7 +295,7 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
         vis_dir = f"{output_dir}/vis"
         Path(vis_dir).mkdir(exist_ok=True)
  
-    model = YOLO(model_file)
+    mdl = YOLO(model) if isinstance(model, str) else model
    
     # read file if annotations are provided
     if ann_file:
@@ -351,13 +351,13 @@ def run_tiled_inference(model_file: str, task: str, class_ids: list, imgs_dir: s
         # run detection on patches 
         patch_fns = [patch["patch_fn"] for patch in patches]
         if task == "detect":
-            predictions = model(patch_fns, iou=iou_thresh, verbose=False)
+            predictions = mdl(patch_fns, iou=iou_thresh, verbose=False)
         else:
-            predictions = model(patch_fns, radii=radii, dor=dor_thresh, verbose=False)
+            predictions = mdl(patch_fns, radii=radii, dor=dor_thresh, verbose=False)
         
         # collect predictions from each patch and map it back to image level
         coords, conf, cls = collect_predictions_wrapper(task=task, class_ids=class_ids, predictions=predictions, patches=patches, 
-                                                        device=model.device, patch_output_dir=patch_output_dir)
+                                                        device=mdl.device, patch_output_dir=patch_output_dir)
         
         # get counts before nms
         pre_nms = coords.shape[0]

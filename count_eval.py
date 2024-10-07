@@ -12,7 +12,7 @@ from metrics import ConfusionMatrix
 from globs import *
 
 
-def get_test_counts(ann_file: str, class_ids: list) -> None:
+def get_test_counts(ann_file: str, class_ids: list) -> str:
     """
     From a test set annotations file as produced by preprocessing.py, collect the class counts for 
     each image in the test set. 
@@ -22,7 +22,7 @@ def get_test_counts(ann_file: str, class_ids: list) -> None:
                             are dictionaries).
         class_ids (list):   list of integer class ids. 
     Returns: 
-        None 
+        path to the directory containing the image counts
     """
     
     with open(ann_file, "r") as f:
@@ -31,7 +31,7 @@ def get_test_counts(ann_file: str, class_ids: list) -> None:
     all_imgs = {} 
     
     counts_dir = f"{Path(ann_file).parent}/image_counts"
-    Path(counts_dir).mkdir()   
+    Path(counts_dir).mkdir(exist_ok=True)   
 
     for img, ann_list in ann_dict.items():
         img_counts = {cls_id: 0 for cls_id in class_ids}
@@ -59,6 +59,8 @@ def get_test_counts(ann_file: str, class_ids: list) -> None:
     total_counts_fn = f"{Path(ann_file).parent}/counts_total.json"
     with open(total_counts_fn, "w") as f:
         json.dump(total_counts, f, indent=1)
+
+    return counts_dir
 
 
 
